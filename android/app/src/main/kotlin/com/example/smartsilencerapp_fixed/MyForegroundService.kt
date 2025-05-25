@@ -6,32 +6,36 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
-import android.os.Build
-import android.os.IBinder
+import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import java.util.Date
+import java.util.*
 import android.Manifest
-import java.text.SimpleDateFormat
+import android.os.Looper
 
-
+import android.provider.Settings
 
 class MyForegroundService : Service() {
 
     companion object {
         const val CHANNEL_ID = "ForegroundServiceChannel"
+        const val ALERTS_CHANNEL_ID = "ALERTS_CHANNEL"
         const val NOTIF_ID_FOREGROUND = 1
         const val NOTIF_ID_SILENCE_PROMPT = 2
+        const val NOTIF_ID_GPS_PROMPT = 3
         const val ACTION_ALARM_TRIGGER = "com.example.smartsilencerapp_fixed.ACTION_ALARM_TRIGGER"
-        
-        // Direct service actions (replaced broadcast actions)
         const val ACTION_USER_CONFIRMED = "user_confirmed_silence"
         const val ACTION_USER_DECLINED = "user_declined_silence"
+        const val GPS_CHECK_INTERVAL = 30_000L // 30 seconds
+        const val DND_DURATION = 40 * 60 * 1000L // 40 minutes
     }
 
     private var prayerTimesMap: Map<String, Long> = emptyMap()
     private var mode: String = "notification"
+    private lateinit var locationHandler: Handler
+    private lateinit var locationRunnable: Runnable
 
+    // Mosque coordinates
     private val mosqueLat = 33.815115
     private val mosqueLon = 2.864548
     private val mosqueRadiusMeters = 100.0
@@ -41,13 +45,14 @@ class MyForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        createNotificationChannels()
         alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        locationHandler = Handler(Looper.getMainLooper())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action ?: intent?.getStringExtra("action")) {
-            // Handle direct user actions
+            // User actions
             ACTION_USER_CONFIRMED -> {
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
                 handleUserConfirmation(prayer)
@@ -57,7 +62,7 @@ class MyForegroundService : Service() {
                 handleUserDecline()
             }
             
-            // Existing service commands
+            // Service commands
             "silence_now" -> {
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
                 activateDnd(prayer)
@@ -70,28 +75,40 @@ class MyForegroundService : Service() {
             // Initial setup
             else -> {
                 mode = intent?.getStringExtra("mode") ?: "notification"
-                intent?.getBundleExtra("prayerTimesBundle")?.keySet()?.forEach { key ->
-                    prayerTimesMap = prayerTimesMap.toMutableMap().apply {
-                        put(key, intent.getBundleExtra("prayerTimesBundle")?.getLong(key) ?: 0L)
-                    }
-                }
+                val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
+
                 startForeground(NOTIF_ID_FOREGROUND, buildForegroundNotification("Smart Silencer Active"))
-                scheduleNextSilencerCheck()
+    
+                runSilencerLogic(prayer) // ✅ This is the missing piece
             }
+
         }
         return START_STICKY
     }
 
-    private fun createNotificationChannel() {
+    private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            // Foreground service channel
+            NotificationChannel(
                 CHANNEL_ID,
-                "Prayer Alerts",
-                NotificationManager.IMPORTANCE_HIGH // Changed to HIGH for reliability
+                "Service Status",
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Prayer time notifications"
+                description = "Background service notifications"
+                getSystemService(NotificationManager::class.java).createNotificationChannel(this)
             }
-            (getSystemService(NotificationManager::class.java)).createNotificationChannel(channel)
+
+            // High-priority alerts channel
+            NotificationChannel(
+                ALERTS_CHANNEL_ID,
+                "Prayer Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Prayer time alerts and prompts"
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                getSystemService(NotificationManager::class.java).createNotificationChannel(this)
+            }
         }
     }
 
@@ -112,12 +129,54 @@ class MyForegroundService : Service() {
             .build()
     }
 
-    // Modified to use direct service intents
+    // ==================== MODE HANDLERS ====================
+    private fun runSilencerLogic(prayer: String) {
+        Log.d(TAG, "Running silencer for $prayer in $mode mode")
+        Log.d(TAG, "Mode is $mode, executing logic for $prayer")
+
+        when (mode) {
+            "gps" -> handleGpsMode(prayer)
+            "notification" -> sendSilencePromptNotification(prayer)
+            "auto" -> activateDnd(prayer)
+        }
+    }
+
+    // GPS MODE IMPLEMENTATION
+    private fun handleGpsMode(prayer: String) {
+        if (!isGpsEnabled()) {
+            sendGpsEnableNotification()
+            logEvent("gps_skipped_$prayer")
+            return
+        }
+
+        startLocationChecks(prayer)
+        scheduleSoundRestore(prayer, DND_DURATION)
+    }
+
+    private fun startLocationChecks(prayer: String) {
+        // Cancel any existing checks
+        locationHandler.removeCallbacksAndMessages(null)
+
+        locationRunnable = object : Runnable {
+            override fun run() {
+                if (isInMosqueZone()) {
+                    activateDnd(prayer)
+                } else {
+                    restoreNormalSoundMode()
+                }
+                locationHandler.postDelayed(this, GPS_CHECK_INTERVAL)
+            }
+        }
+        locationHandler.post(locationRunnable)
+    }
+
+    // NOTIFICATION MODE IMPLEMENTATION
     private fun sendSilencePromptNotification(prayer: String) {
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
             .setContentTitle("Silence for $prayer prayer?")
             .setContentText("Are you going to the mosque?")
             .setSmallIcon(android.R.drawable.ic_lock_silent_mode)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .addAction(
                 android.R.drawable.ic_lock_silent_mode, 
                 "Yes",
@@ -150,6 +209,27 @@ class MyForegroundService : Service() {
             .notify(NOTIF_ID_SILENCE_PROMPT, notification)
     }
 
+    private fun sendGpsEnableNotification() {
+        val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
+            .setContentTitle("GPS Required")
+            .setContentText("Enable GPS for mosque detection")
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this,
+                    0,
+                    Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
+                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+                )
+            )
+            .setAutoCancel(true)
+            .build()
+
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIF_ID_GPS_PROMPT, notification)
+    }
+
+    // ==================== CORE FUNCTIONALITY ====================
     private fun handleUserConfirmation(prayer: String) {
         Log.d(TAG, "User confirmed silence for $prayer")
         when (mode) {
@@ -162,7 +242,6 @@ class MyForegroundService : Service() {
         Log.d(TAG, "User declined silence")
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).apply {
             cancel(NOTIF_ID_SILENCE_PROMPT)
-            // Optional: Ensure sound isn't silenced
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && isNotificationPolicyAccessGranted) {
                 setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
             }
@@ -176,7 +255,7 @@ class MyForegroundService : Service() {
                 it.isNotificationPolicyAccessGranted 
             }?.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
         }
-        scheduleRestoreSound(prayer, 40 * 60 * 1000) // 40 minute buffer
+        scheduleSoundRestore(prayer, DND_DURATION)
     }
 
     private fun scheduleNextSilencerCheck() {
@@ -219,16 +298,10 @@ class MyForegroundService : Service() {
         }
     }
 
-    private fun runSilencerLogic(prayer: String) {
-        Log.d(TAG, "Running silencer for $prayer in $mode mode")
-        when (mode) {
-            "gps" -> {
-                if (isInMosqueZone()) activateDnd(prayer)
-                else Log.d(TAG, "Not in mosque zone - not silencing")
-            }
-            "notification" -> sendSilencePromptNotification(prayer)
-            "auto" -> activateDnd(prayer)
-        }
+    // ==================== UTILITIES ====================
+    private fun isGpsEnabled(): Boolean {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
     }
 
     private fun isInMosqueZone(): Boolean {
@@ -256,20 +329,19 @@ class MyForegroundService : Service() {
         }
     }
 
-    private fun scheduleRestoreSound(prayer: String, bufferMillis: Long) {
-        prayerTimesMap[prayer]?.plus(bufferMillis)?.let { restoreTime ->
-            Log.d(TAG, "Scheduling sound restore at ${Date(restoreTime)}")
-            PendingIntent.getBroadcast(
-                this,
-                1,
-                Intent(this, RestoreSoundReceiver::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
-            ).also { pendingIntent ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, restoreTime, pendingIntent)
-                } else {
-                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, restoreTime, pendingIntent)
-                }
+    private fun scheduleSoundRestore(prayer: String, delayMillis: Long) {
+        val restoreTime = System.currentTimeMillis() + delayMillis
+        Log.d(TAG, "Scheduling sound restore at ${Date(restoreTime)}")
+        PendingIntent.getBroadcast(
+            this,
+            1,
+            Intent(this, RestoreSoundReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+        ).also { pendingIntent ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, restoreTime, pendingIntent)
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, restoreTime, pendingIntent)
             }
         }
     }
@@ -296,7 +368,13 @@ class MyForegroundService : Service() {
         }
     }
 
+    private fun logEvent(event: String) {
+        // Implement your analytics/logging here
+        Log.d(TAG, "Event logged: $event")
+    }
+
     override fun onDestroy() {
+        locationHandler.removeCallbacksAndMessages(null)
         cancelAlarm()
         restoreNormalSoundMode()
         super.onDestroy()

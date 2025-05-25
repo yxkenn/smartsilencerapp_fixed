@@ -4,7 +4,7 @@ import 'package:adhan/adhan.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hijri/hijri_calendar.dart'; // Add this package for Hijri date
+import 'package:hijri/hijri_calendar.dart';
 
 class PrayerTimesPage extends StatefulWidget {
   @override
@@ -17,14 +17,15 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   Timer? timer;
   Coordinates? coordinates;
   bool locationPermissionGranted = false;
-  String silencerMode = "gps"; // Keep for internal use, no UI here
 
-  static const platform = MethodChannel('com.yourapp/foreground');
+  static const platform = MethodChannel('com.example.smartsilencerapp_fixed/foreground');
+  String silencerMode = "gps"; // default fallback
 
   @override
   void initState() {
     super.initState();
     _initLocationAndPrayerTimes();
+
     timer = Timer.periodic(Duration(seconds: 1), (_) {
       setState(() {
         currentTime = DateTime.now();
@@ -38,8 +39,12 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     super.dispose();
   }
 
+  // -------------------- Initialization --------------------
+
   Future<void> _initLocationAndPrayerTimes() async {
     final prefs = await SharedPreferences.getInstance();
+    silencerMode = prefs.getString('silencerMode') ?? 'gps';
+
     final lat = prefs.getDouble('latitude');
     final lon = prefs.getDouble('longitude');
 
@@ -59,7 +64,12 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     }
 
     if (coordinates != null) {
-      _calculatePrayerTimes();
+      if (_loadPrayerTimesFromPrefs(prefs)) {
+        setState(() {});
+        await startNativeSilencerService(prayerTimes!, silencerMode);
+      } else {
+        await _calculatePrayerTimes();
+      }
     } else {
       print("No location available for prayer times calculation.");
     }
@@ -67,26 +77,23 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   Future<bool> _requestLocationPermission() async {
     LocationPermission permission = await Geolocator.checkPermission();
-
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.deniedForever) {
-      return false;
-    }
-    return permission == LocationPermission.whileInUse ||
-        permission == LocationPermission.always;
+    if (permission == LocationPermission.deniedForever) return false;
+    return permission == LocationPermission.whileInUse || permission == LocationPermission.always;
   }
 
   Future<Position?> _getCurrentLocation() async {
     try {
-      return await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high);
+      return await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
     } catch (e) {
       print("Error getting location: $e");
       return null;
     }
   }
+
+  // -------------------- Prayer Time Logic --------------------
 
   Future<void> _calculatePrayerTimes() async {
     if (coordinates == null) return;
@@ -94,67 +101,113 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     final params = CalculationMethod.muslim_world_league.getParameters();
     params.madhab = Madhab.shafi;
 
-    final date = DateComponents.from(DateTime.now());
+    final now = DateTime.now();
+    final date = DateComponents.from(now);
+
     prayerTimes = PrayerTimes(coordinates!, date, params);
 
     await _storePrayerTimesToPrefs(prayerTimes!);
-
-    startNativeSilencerService(prayerTimes!, silencerMode);
-    setState(() {}); // Refresh UI with new prayer times
+    await startNativeSilencerService(prayerTimes!, silencerMode);
+    setState(() {});
   }
 
   Future<void> _storePrayerTimesToPrefs(PrayerTimes pt) async {
     final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now().millisecondsSinceEpoch;
 
-    final prayers = [
-      Prayer.fajr,
-      Prayer.dhuhr,
-      Prayer.asr,
-      Prayer.maghrib,
-      Prayer.isha
-    ];
+    final prayers = {
+      'fajr': pt.fajr,
+      'dhuhr': pt.dhuhr,
+      'asr': pt.asr,
+      'maghrib': pt.maghrib,
+      'isha': pt.isha,
+    };
 
-    Map<String, int> prayerTimesMap = {};
-    for (final prayer in prayers) {
-      final time = pt.timeForPrayer(prayer);
-      if (time != null) {
-        prayerTimesMap[prayer.name.toLowerCase()] = time.millisecondsSinceEpoch;
+    for (final entry in prayers.entries) {
+      if (entry.value != null) {
+        final timestamp = entry.value!.millisecondsSinceEpoch;
+        if (timestamp > now - 86400000 && timestamp < now + 86400000) {
+          await prefs.setInt('prayerTime_${entry.key}', timestamp);
+        }
       }
     }
 
-    // Store as JSON string or individual keys
-    // Here, storing individual keys for simplicity
-    for (final entry in prayerTimesMap.entries) {
-      await prefs.setInt('prayerTime_${entry.key}', entry.value);
+    await prefs.setString('prayerTimesDate', DateTime.now().toIso8601String());
+  }
+
+  bool _loadPrayerTimesFromPrefs(SharedPreferences prefs) {
+    final prayers = <Prayer, DateTime>{};
+    final storedDateStr = prefs.getString('prayerTimesDate');
+
+    if (storedDateStr == null) return false;
+
+    final storedDate = DateTime.tryParse(storedDateStr);
+    final today = DateTime.now();
+
+    if (storedDate == null ||
+        storedDate.year != today.year ||
+        storedDate.month != today.month ||
+        storedDate.day != today.day) {
+      return false;
     }
+
+    final keys = {
+      Prayer.fajr: 'prayerTime_fajr',
+      Prayer.dhuhr: 'prayerTime_dhuhr',
+      Prayer.asr: 'prayerTime_asr',
+      Prayer.maghrib: 'prayerTime_maghrib',
+      Prayer.isha: 'prayerTime_isha',
+    };
+
+    for (var entry in keys.entries) {
+      final ts = prefs.getInt(entry.value);
+      if (ts == null) return false;
+      prayers[entry.key] = DateTime.fromMillisecondsSinceEpoch(ts);
+    }
+
+    if (coordinates != null) {
+      final params = CalculationMethod.muslim_world_league.getParameters();
+      params.madhab = Madhab.shafi;
+
+      final date = DateComponents.from(today);
+      prayerTimes = PrayerTimes(coordinates!, date, params);
+
+      for (final prayer in prayers.entries) {
+        prayerTimes = prayerTimes!.copyWith(prayer.key, prayers[prayer.key]!);
+      }
+
+      return true;
+    }
+
+    return false;
   }
 
   Future<void> startNativeSilencerService(PrayerTimes pt, String mode) async {
     try {
-      final prayers = [
-        Prayer.fajr,
-        Prayer.dhuhr,
-        Prayer.asr,
-        Prayer.maghrib,
-        Prayer.isha
-      ];
+      final prayers = {
+        'fajr': pt.fajr,
+        'dhuhr': pt.dhuhr,
+        'asr': pt.asr,
+        'maghrib': pt.maghrib,
+        'isha': pt.isha,
+      };
 
-      Map<String, int> prayerTimesMap = {};
-      for (final prayer in prayers) {
-        final time = pt.timeForPrayer(prayer);
-        if (time != null) {
-          prayerTimesMap[prayer.name.toLowerCase()] = time.millisecondsSinceEpoch;
-        }
-      }
+      final prayerTimesMap = Map<String, int>.fromEntries(
+        prayers.entries.where((e) => e.value != null).map(
+              (e) => MapEntry(e.key, e.value!.millisecondsSinceEpoch),
+            ),
+      );
 
       await platform.invokeMethod('startService', {
         'mode': mode,
         'prayerTimes': prayerTimesMap,
       });
     } on PlatformException catch (e) {
-      print("Failed to start native service: '${e.message}'.");
+      print("Native call failed: ${e.message}\n${e.details}");
     }
   }
+
+  // -------------------- UI Helpers --------------------
 
   String _formatTime(DateTime? dt) {
     if (dt == null) return '--:--';
@@ -163,6 +216,7 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   Prayer? _nextPrayer() {
     if (prayerTimes == null || currentTime == null) return null;
+
     final now = currentTime!;
     for (final prayer in [
       Prayer.fajr,
@@ -176,7 +230,8 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
         return prayer;
       }
     }
-    return Prayer.fajr;
+
+    return Prayer.fajr; // fallback
   }
 
   Duration _timeUntilNextPrayer() {
@@ -184,10 +239,12 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     if (prayerTimes == null || currentTime == null || next == null) {
       return Duration.zero;
     }
+
     final nextTime = prayerTimes!.timeForPrayer(next);
-    if (nextTime == null) return Duration.zero;
-    return nextTime.difference(currentTime!);
+    return nextTime?.difference(currentTime!) ?? Duration.zero;
   }
+
+  // -------------------- UI --------------------
 
   @override
   Widget build(BuildContext context) {
@@ -208,7 +265,6 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
           : Column(
               children: [
                 SizedBox(height: 16),
-                // Display Hijri date instead of location
                 Text(
                   "Hijri Date: ${hijriDate.hYear}-${hijriDate.hMonth}-${hijriDate.hDay}",
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -229,16 +285,17 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
                           title: Text(
                             prayer.name.toUpperCase(),
                             style: TextStyle(
-                              fontWeight:
-                                  isNext ? FontWeight.bold : FontWeight.normal,
+                              fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
                               color: isNext ? Colors.green : null,
                             ),
                           ),
-                          trailing: Text(_formatTime(time),
-                              style: TextStyle(
-                                  fontWeight:
-                                      isNext ? FontWeight.bold : FontWeight.normal,
-                                  color: isNext ? Colors.green : null)),
+                          trailing: Text(
+                            _formatTime(time),
+                            style: TextStyle(
+                              fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
+                              color: isNext ? Colors.green : null,
+                            ),
+                          ),
                         );
                       },
                     ),
@@ -251,6 +308,27 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
                 SizedBox(height: 16),
               ],
             ),
+    );
+  }
+}
+
+extension on PrayerTimes {
+  PrayerTimes copyWith(Prayer key, DateTime dateTime) {
+    final updatedTimes = {
+      Prayer.fajr: this.fajr,
+      Prayer.sunrise: this.sunrise,
+      Prayer.dhuhr: this.dhuhr,
+      Prayer.asr: this.asr,
+      Prayer.maghrib: this.maghrib,
+      Prayer.isha: this.isha,
+    };
+
+    updatedTimes[key] = dateTime;
+
+    return PrayerTimes(
+      this.coordinates,
+      this.dateComponents,
+      this.calculationParameters,
     );
   }
 }
