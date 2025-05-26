@@ -16,6 +16,8 @@ import android.os.Looper
 import android.provider.Settings
 
 class MyForegroundService : Service() {
+    private val TAG = "MyForegroundService"
+
 
     companion object {
         const val CHANNEL_ID = "ForegroundServiceChannel"
@@ -51,7 +53,11 @@ class MyForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action ?: intent?.getStringExtra("action")) {
+        
+        startForeground(NOTIF_ID_FOREGROUND, buildForegroundNotification("Initializing silencer..."))
+        Log.d(TAG, "🚀 Starting foreground service with mode: $mode")
+        when (intent?.getStringExtra("action")) {
+
             // User actions
             ACTION_USER_CONFIRMED -> {
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
@@ -77,7 +83,7 @@ class MyForegroundService : Service() {
                 mode = intent?.getStringExtra("mode") ?: "notification"
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
 
-                startForeground(NOTIF_ID_FOREGROUND, buildForegroundNotification("Smart Silencer Active"))
+                
     
                 runSilencerLogic(prayer) // ✅ This is the missing piece
             }
@@ -389,5 +395,5 @@ class MyForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private val TAG = "MyForegroundService"
+    
 }

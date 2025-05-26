@@ -43,7 +43,10 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   Future<void> _initLocationAndPrayerTimes() async {
     final prefs = await SharedPreferences.getInstance();
-    silencerMode = prefs.getString('silencerMode') ?? 'gps';
+    
+
+    
+    
 
     final lat = prefs.getDouble('latitude');
     final lon = prefs.getDouble('longitude');
@@ -63,16 +66,21 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
       }
     }
 
-    if (coordinates != null) {
-      if (_loadPrayerTimesFromPrefs(prefs)) {
-        setState(() {});
-        await startNativeSilencerService(prayerTimes!, silencerMode);
-      } else {
-        await _calculatePrayerTimes();
-      }
-    } else {
-      print("No location available for prayer times calculation.");
-    }
+  if (_loadPrayerTimesFromPrefs(prefs)) {
+    setState(() {});
+    await schedulePrayerAlarms({
+      'fajr': prayerTimes!.fajr,
+      'dhuhr': prayerTimes!.dhuhr,
+      'asr': prayerTimes!.asr,
+      'maghrib': prayerTimes!.maghrib,
+      'isha': prayerTimes!.isha,
+    });
+    await startNativeSilencerService(prayerTimes!, silencerMode);
+    
+    
+  } else {
+    await _calculatePrayerTimes();
+  }
   }
 
   Future<bool> _requestLocationPermission() async {
@@ -90,6 +98,20 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     } catch (e) {
       print("Error getting location: $e");
       return null;
+    }
+  }
+  Future<void> schedulePrayerAlarms(Map<String, DateTime> prayerTimes) async {
+    try {
+      // Convert DateTime to milliseconds since epoch
+      final timesInMillis = prayerTimes.map((key, value) => 
+        MapEntry(key, value.millisecondsSinceEpoch));
+      
+      final result = await MethodChannel('com.example.smartsilencerapp_fixed/alarms')
+          .invokeMethod('schedulePrayerAlarms', {'prayerTimes': timesInMillis});
+      
+      print('Alarms scheduled successfully: $result');
+    } on PlatformException catch (e) {
+      print('Failed to schedule alarms: ${e.message}');
     }
   }
 
@@ -172,9 +194,7 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
       final date = DateComponents.from(today);
       prayerTimes = PrayerTimes(coordinates!, date, params);
 
-      for (final prayer in prayers.entries) {
-        prayerTimes = prayerTimes!.copyWith(prayer.key, prayers[prayer.key]!);
-      }
+      
 
       return true;
     }
@@ -312,23 +332,16 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   }
 }
 
-extension on PrayerTimes {
-  PrayerTimes copyWith(Prayer key, DateTime dateTime) {
-    final updatedTimes = {
-      Prayer.fajr: this.fajr,
-      Prayer.sunrise: this.sunrise,
-      Prayer.dhuhr: this.dhuhr,
-      Prayer.asr: this.asr,
-      Prayer.maghrib: this.maghrib,
-      Prayer.isha: this.isha,
-    };
+class NativeAlarms {
+  static const platform = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
 
-    updatedTimes[key] = dateTime;
-
-    return PrayerTimes(
-      this.coordinates,
-      this.dateComponents,
-      this.calculationParameters,
-    );
+  static Future<void> schedulePrayerAlarms() async {
+    try {
+      await platform.invokeMethod('schedulePrayerAlarms');
+    } on PlatformException catch (e) {
+      print("Failed to schedule alarms: '${e.message}'.");
+    }
   }
 }
+
+

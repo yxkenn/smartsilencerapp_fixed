@@ -13,72 +13,33 @@ class SmartSilencerScreen extends StatefulWidget {
 
 class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
   final _platform = const MethodChannel('com.example.smartsilencerapp_fixed/foreground');
-  bool _isServiceRunning = false;
+  bool _isToggleOn = false;
   String _currentMode = 'notification';
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
-    _checkServiceStatus();
   }
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _currentMode = prefs.getString('silencer_mode') ?? 'notification';
+      _isToggleOn = prefs.getBool('silencer_enabled') ?? false;
     });
   }
 
-  Future<void> _saveSettings() async {
+  Future<void> _saveToggleStatus(bool value) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('silencer_mode', _currentMode);
+    await prefs.setBool('silencer_enabled', value);
+    setState(() => _isToggleOn = value);
   }
 
-  Future<void> _checkServiceStatus() async {
-    try {
-      final bool? isRunning = await _platform.invokeMethod('isServiceRunning');
-      setState(() => _isServiceRunning = isRunning ?? false);
-    } on PlatformException catch (e) {
-      debugPrint("Failed to check service status: ${e.message}");
-    }
-  }
-
-  Future<bool> _ensurePermissions() async {
-    final statuses = await [
-      Permission.location,
-      Permission.notification,
-      if (Platform.isAndroid) Permission.ignoreBatteryOptimizations,
-    ].request();
-    return statuses.values.every((status) => status.isGranted);
-  }
-
-  Future<void> _toggleService(bool enable) async {
-    if (enable && !await _ensurePermissions()) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Required permissions not granted')),
-      );
-      return;
-    }
-
-    try {
-      final String? result = await _platform.invokeMethod(
-        enable ? 'startService' : 'stopService',
-        {'mode': _currentMode},
-      );
-      
-      if (!mounted) return;
-      setState(() => _isServiceRunning = enable);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result ?? (enable ? 'Service started' : 'Service stopped'))),
-      );
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: ${e.message}')),
-      );
-    }
+  Future<void> _saveMode(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('silencer_mode', value);
+    setState(() => _currentMode = value);
   }
 
   Future<void> _toggleDnd(bool enable) async {
@@ -93,7 +54,7 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('DND Error: ${e.message}')),
       );
-      
+
       if (e.code == 'DND_PERMISSION') {
         await _platform.invokeMethod('requestDndPermission');
       }
@@ -111,7 +72,7 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         child: Column(
           children: [
-            // Service Control Card
+            // Settings Card
             Card(
               margin: const EdgeInsets.only(bottom: 20),
               child: Padding(
@@ -121,17 +82,14 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
                   children: [
                     const Text(
                       'Silencer Settings',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Enable Smart Silencer'),
-                      value: _isServiceRunning,
-                      onChanged: _toggleService,
+                      value: _isToggleOn,
+                      onChanged: _saveToggleStatus,
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
@@ -157,11 +115,7 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
                       ],
                       onChanged: (value) {
                         if (value != null) {
-                          setState(() => _currentMode = value);
-                          _saveSettings();
-                          if (_isServiceRunning) {
-                            _toggleService(true); // Restart with new mode
-                          }
+                          _saveMode(value);
                         }
                       },
                     ),
@@ -170,7 +124,7 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
               ),
             ),
 
-            // Manual Controls Card
+            // Manual Controls
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -179,10 +133,7 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
                   children: [
                     const Text(
                       'Manual Control',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 16),
                     Row(
