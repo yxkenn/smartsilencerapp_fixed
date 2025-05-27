@@ -55,12 +55,22 @@ class MyForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         
         startForeground(NOTIF_ID_FOREGROUND, buildForegroundNotification("Initializing silencer..."))
+        mode = intent?.getStringExtra("mode") ?: mode
+        Log.d(TAG, "📥 onStartCommand called with action=${intent?.action}")
+
+
         Log.d(TAG, "🚀 Starting foreground service with mode: $mode")
-        when (intent?.getStringExtra("action")) {
+        when (intent?.action) {
+
 
             // User actions
             ACTION_USER_CONFIRMED -> {
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
+                Log.d(TAG, "✅ ACTION_USER_CONFIRMED triggered with prayer=$prayer")
+                if (prayer == null) {
+                    Log.e(TAG, "❌ Missing prayer extra in confirmation intent")
+                    return START_STICKY
+                }
                 handleUserConfirmation(prayer)
             }
             
@@ -79,14 +89,22 @@ class MyForegroundService : Service() {
             }
             
             // Initial setup
+           
+            ACTION_ALARM_TRIGGER -> {
+                val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
+                runSilencerLogic(prayer)
+            }
+
             else -> {
-                mode = intent?.getStringExtra("mode") ?: "notification"
+                
+
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
 
                 
     
                 runSilencerLogic(prayer) // ✅ This is the missing piece
             }
+
 
         }
         return START_STICKY
@@ -188,10 +206,11 @@ class MyForegroundService : Service() {
                 "Yes",
                 PendingIntent.getService(
                     this,
-                    0,
+                    prayer.hashCode(),
                     Intent(this, MyForegroundService::class.java).apply {
                         action = ACTION_USER_CONFIRMED
                         putExtra("prayer", prayer)
+                        putExtra("mode", mode)
                     },
                     PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
                 )
@@ -238,6 +257,7 @@ class MyForegroundService : Service() {
     // ==================== CORE FUNCTIONALITY ====================
     private fun handleUserConfirmation(prayer: String) {
         Log.d(TAG, "User confirmed silence for $prayer")
+        Log.d(TAG, "Mode = $mode")
         when (mode) {
             "gps" -> if (isInMosqueZone()) activateDnd(prayer)
             "auto", "notification" -> activateDnd(prayer)
@@ -264,45 +284,7 @@ class MyForegroundService : Service() {
         scheduleSoundRestore(prayer, DND_DURATION)
     }
 
-    private fun scheduleNextSilencerCheck() {
-        val now = System.currentTimeMillis()
-        val upcomingPrayers = prayerTimesMap.filterValues { it > now }
 
-        if (upcomingPrayers.isEmpty()) {
-            Log.d(TAG, "No upcoming prayers to schedule")
-            return
-        }
-
-        val (nextPrayer, nextTime) = upcomingPrayers.minByOrNull { it.value }!!
-        val triggerAt = nextTime - 3 * 60 * 1000 // 3 minutes before prayer
-
-        if (triggerAt <= now) {
-            Log.d(TAG, "Prayer time close, running silencer immediately")
-            runSilencerLogic(nextPrayer)
-            scheduleAfterPrayer(nextPrayer)
-            return
-        }
-
-        Log.d(TAG, "Scheduling silencer for $nextPrayer at ${Date(triggerAt)}")
-        pendingAlarmIntent = Intent(this, AlarmReceiver::class.java).apply {
-            action = ACTION_ALARM_TRIGGER
-            putExtra("prayer", nextPrayer)
-            putExtra("mode", mode)
-        }.let { intent ->
-            PendingIntent.getBroadcast(
-                this,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
-            )
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingAlarmIntent)
-        } else {
-            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingAlarmIntent)
-        }
-    }
 
     // ==================== UTILITIES ====================
     private fun isGpsEnabled(): Boolean {
@@ -363,7 +345,7 @@ class MyForegroundService : Service() {
 
     private fun scheduleAfterPrayer(prayer: String) {
         prayerTimesMap = prayerTimesMap.toMutableMap().apply { remove(prayer) }
-        scheduleNextSilencerCheck()
+        
     }
 
     private fun getImmutableFlag(): Int {

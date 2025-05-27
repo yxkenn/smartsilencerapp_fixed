@@ -95,7 +95,7 @@ class AlarmReceiver : BroadcastReceiver() {
             Log.d(TAG, "🕌 Prayer: $prayerName at ${Date(prayerTime)}")
 
             Intent(context, MyForegroundService::class.java).apply {
-                putExtra("action", "handle_prayer")
+                putExtra("action", MyForegroundService.ACTION_ALARM_TRIGGER)
                 putExtra("prayer", prayerName)
                 putExtra("time", prayerTime)
                 putExtra("mode", mode)
