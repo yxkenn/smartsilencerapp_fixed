@@ -11,9 +11,9 @@ import android.app.PendingIntent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            val mainActivity = MainActivity()
-            mainActivity.schedulePrayerAlarms(context)
-            Log.d("BootReceiver", "✅ Re-scheduled alarms after boot")
+            Log.d("BootReceiver", "✅ Device rebooted — Rescheduling alarms")
+            PrayerAlarmManager.schedulePrayerAlarms(context)
         }
     }
 }
+

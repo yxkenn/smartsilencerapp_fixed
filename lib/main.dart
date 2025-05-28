@@ -33,6 +33,8 @@ Future<void> _initializeApp() async {
 
   // Initialize your silencer controller
   silencerController = SmartSilencerController(flutterLocalNotificationsPlugin);
+  await NativeAlarms.schedulePrayerAlarms();
+
 }
 
 class SmartSilencerApp extends StatelessWidget {
@@ -68,7 +70,7 @@ class _MainNavigationState extends State<MainNavigation> {
 
   final List<Widget> _widgetOptions = <Widget>[
     PrayerTimesPage(),
-    const SmartSilencerScreen(),
+    const SmartSilencerScreen(prayerTimes: {},),
     const Center(child: Text('Reminder Screen Placeholder')),
     const Center(child: Text('Settings Screen Placeholder')),
   ];

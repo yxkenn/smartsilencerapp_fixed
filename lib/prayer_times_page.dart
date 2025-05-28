@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hijri/hijri_calendar.dart';
 
+
 class PrayerTimesPage extends StatefulWidget {
   @override
   _PrayerTimesPageState createState() => _PrayerTimesPageState();
@@ -82,6 +83,8 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     await _calculatePrayerTimes();
   }
   }
+
+
 
   Future<bool> _requestLocationPermission() async {
     LocationPermission permission = await Geolocator.checkPermission();
@@ -226,6 +229,49 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
       print("Native call failed: ${e.message}\n${e.details}");
     }
   }
+
+
+  Future<void> saveModeAndReschedule(String mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('silencerMode', mode); // Save mode locally
+    setState(() {
+      silencerMode = mode;
+    });
+
+    try {
+      final Map<String, int> prayerTimesMap = {};
+      final keys = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+      for (var key in keys) {
+        final ts = prefs.getInt('prayerTime_$key');
+        if (ts != null) {
+          prayerTimesMap[key] = ts;
+        }
+      }
+
+      if (prayerTimesMap.length != 5) throw Exception('Incomplete cached prayer times');
+
+      const MethodChannel alarmChannel = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
+
+      // Save to native
+      await alarmChannel.invokeMethod('savePrayerTimesToNative', {
+        'prayerTimes': prayerTimesMap,
+      });
+
+      // Schedule alarms
+      await alarmChannel.invokeMethod('schedulePrayerAlarms', {
+        'prayerTimes': prayerTimesMap,
+        'mode': mode,
+      });
+
+      print('✅ Alarms rescheduled with updated mode: $mode');
+    } catch (e) {
+      print('❌ Failed to reschedule alarms: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Failed to fetch cached prayer times.")),
+      );
+    }
+  }
+
 
   // -------------------- UI Helpers --------------------
 

@@ -58,6 +58,7 @@ class MyForegroundService : Service() {
         mode = intent?.getStringExtra("mode") ?: mode
         Log.d(TAG, "📥 onStartCommand called with action=${intent?.action}")
 
+        Log.d(TAG, "🔍 Intent received: action=${intent?.action}, extras=${intent?.extras}")
 
         Log.d(TAG, "🚀 Starting foreground service with mode: $mode")
         when (intent?.action) {
@@ -92,6 +93,9 @@ class MyForegroundService : Service() {
            
             ACTION_ALARM_TRIGGER -> {
                 val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
+                mode = intent.getStringExtra("mode") ?: mode // <-- ADD THIS LINE
+                Log.d(TAG, "🚦 Mode received from alarm: $mode")
+
                 runSilencerLogic(prayer)
             }
 
@@ -99,6 +103,7 @@ class MyForegroundService : Service() {
                 
 
                 val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
+                mode = intent.getStringExtra("mode") ?: mode
 
                 
     
