@@ -24,12 +24,13 @@ class AlarmReceiver : BroadcastReceiver() {
         const val MODE_NOTIFICATION = "notification"
         const val MODE_GPS = "gps"
         const val MODE_AUTO = "auto"
-        
+        const val ACTION_SKIP_LIMIT_REACHED = "skip_limit_reached"
+
         val PRAYER_ORDER = listOf("fajr", "dhuhr", "asr", "maghrib", "isha")
 
         fun getCurrentMode(context: Context): String {
-            return PreferenceManager.getDefaultSharedPreferences(context)
-                .getString(KEY_MODE, MODE_NOTIFICATION) ?: MODE_NOTIFICATION
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_MODE, MODE_NOTIFICATION) ?: MODE_NOTIFICATION
         }
 
         fun logAllScheduledAlarms(context: Context) {
@@ -59,18 +60,19 @@ class AlarmReceiver : BroadcastReceiver() {
         }
     }
 
+
     private fun isValidMode(mode: String): Boolean {
         return mode in listOf(MODE_NOTIFICATION, MODE_GPS, MODE_AUTO)
     }
-
     override fun onReceive(context: Context, intent: Intent?) {
         Log.d(TAG, "══════════════════════════════════════")
         Log.d(TAG, "⏰ ALARM RECEIVED at ${Date()}")
 
         // Get the current mode from SharedPreferences
-        val modePrefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val modePrefs = context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+
         var currentMode = modePrefs.getString(KEY_MODE, MODE_NOTIFICATION) ?: MODE_NOTIFICATION
-        
+
         // Validate the mode
         if (!isValidMode(currentMode)) {
             Log.w(TAG, "⚠️ Invalid mode detected: $currentMode. Defaulting to notification")
@@ -135,4 +137,5 @@ class AlarmReceiver : BroadcastReceiver() {
             wakeLock.release()
         }
     }
+
 }

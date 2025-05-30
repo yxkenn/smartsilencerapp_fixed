@@ -13,6 +13,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.*
 import android.content.pm.ServiceInfo
+import android.content.SharedPreferences
+import android.graphics.Color
+
+
 
 
 
@@ -34,6 +38,14 @@ class MyForegroundService : Service() {
         const val GPS_CHECK_INTERVAL = 30_000L // 30 seconds
         const val DND_DURATION = 40 * 60 * 1000L // 40 minutes
         const val GPS_WAIT_TIMEOUT = 15 * 60 * 1000L // 15 minutes
+
+
+        const val PREF_SKIP_COUNT = "skip_count"
+        const val PREF_MAX_SKIPS = "max_skips"
+        const val PREF_REMINDER_ENABLED = "reminder_enabled"
+        const val ACTION_SKIP_LIMIT_REACHED = "skip_limit_reached"
+
+
         
         // Constants for foreground service types
         const val FOREGROUND_SERVICE_TYPE_LOCATION = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
@@ -90,6 +102,7 @@ class MyForegroundService : Service() {
 
             // Process the incoming intent
             mode = intent?.getStringExtra("mode") ?: mode
+            currentPrayer = intent?.getStringExtra("prayer") ?: currentPrayer
             Log.d(TAG, "Service started with action=${intent?.action}, mode=$mode")
 
             when (intent?.action) {
@@ -127,7 +140,13 @@ class MyForegroundService : Service() {
                     Log.d(TAG, "GPS notification dismissed for $prayer")
                     // You could add additional handling here if needed
                 }
-            
+
+
+                ACTION_SKIP_LIMIT_REACHED -> {
+                    val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
+                    showSkipLimitNotification(prayer)
+                }
+                    
                 
                 else -> {
                     val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
@@ -149,21 +168,87 @@ class MyForegroundService : Service() {
         return START_STICKY
     }
 
+
+
+
+    private fun getPrefs(): SharedPreferences {
+        return getSharedPreferences("silencer_prefs", Context.MODE_PRIVATE)
+    }
+
+    private fun incrementSkipCount(): Boolean {
+        val prefs = getPrefs()
+        val currentSkips = prefs.getInt(PREF_SKIP_COUNT, 0)
+        val maxSkips = prefs.getInt(PREF_MAX_SKIPS, 3)
+        val newSkips = currentSkips + 1
+
+        Log.d(TAG, "Incrementing skip count. Current: $currentSkips, Max: $maxSkips, New: $newSkips")
+
+        return if (newSkips >= maxSkips) {
+            Log.w(TAG, "Skip limit reached! Current skips: $newSkips (max: $maxSkips)")
+            resetSkipCount() // ✅ Use your existing method
+            true
+        } else {
+            prefs.edit().putInt(PREF_SKIP_COUNT, newSkips).apply()
+            false
+        }
+    }
+
+
+    private fun resetSkipCount() {
+        val prefs = getPrefs()
+        val currentSkips = prefs.getInt(PREF_SKIP_COUNT, 0)
+        Log.d(TAG, "Resetting skip count from $currentSkips to 0")
+        prefs.edit().putInt(PREF_SKIP_COUNT, 0).apply()
+    }
+
+    private fun shouldShowReminder(): Boolean {
+        val prefs = getPrefs()
+        if (!prefs.getBoolean(PREF_REMINDER_ENABLED, true)) {
+            Log.d(TAG, "Reminders are disabled in settings")
+            return false
+        }
+        
+        val currentSkips = prefs.getInt(PREF_SKIP_COUNT, 0)
+        val maxSkips = prefs.getInt(PREF_MAX_SKIPS, 3)
+        val shouldShow = currentSkips < maxSkips
+        
+        Log.d(TAG, "Checking if should show reminder. Current skips: $currentSkips, Max skips: $maxSkips, Should show: $shouldShow")
+        return shouldShow
+    }
+
+
+    private fun showSkipLimitNotification(prayer: String) {
+        Log.d(TAG, "Showing skip limit notification for prayer: $prayer")
+
+        val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
+            .setContentTitle("⚠️ Prayer Reminder")
+            .setContentText("You've skipped too many prayers! Don't skip $prayer prayer")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_ALL)  // ✅ vibrate, lights
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)  // ✅ show on lockscreen
+            .setAutoCancel(true)
+            .build()
+
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIF_ID_SILENCE_PROMPT + 1000, notification) // 💡 bump ID to avoid conflicts
+    }
+
+
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel(CHANNEL_ID, "Service Status", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Background service notifications"
-                getSystemService(NotificationManager::class.java).createNotificationChannel(this)
-            }
-
+            // For prayer alerts channel:
             NotificationChannel(ALERTS_CHANNEL_ID, "Prayer Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Prayer time alerts and prompts"
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setSound(null, null)
-                getSystemService(NotificationManager::class.java).createNotificationChannel(this)
-                setBypassDnd(true)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                getSystemService(NotificationManager::class.java).createNotificationChannel(this)
+                description = "Important prayer time notifications"
+                enableLights(true)       // Turns on LED light
+                lightColor = Color.RED   // Makes LED red
+                enableVibration(true)   // Phone will vibrate
+                vibrationPattern = longArrayOf(0, 500, 200, 500) // Vibrate pattern (wait, vibrate, wait, vibrate)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC // Shows on lock screen
+                setSound(null, null)     // No sound (since we're using vibration)
+                setBypassDnd(true)       // Shows even in Do Not Disturb mode
+            }.also { channel ->
+                getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
             }
         }
     }
@@ -507,6 +592,12 @@ class MyForegroundService : Service() {
     }
     
     private fun handleGpsTimeout(prayer: String) {
+        Log.d(TAG, "Handling GPS timeout for prayer: $prayer")
+        val limitReached = incrementSkipCount()
+        if (limitReached) {
+            Log.w(TAG, "Skip limit reached after GPS timeout - showing notification")
+            showSkipLimitNotification(prayer)
+        }
         logEvent("gps_timeout_$prayer")
         stopForeground(true)
         sendNotification(
@@ -516,6 +607,20 @@ class MyForegroundService : Service() {
             autoCancel = true
         )
     }
+
+
+
+     // In MyForegroundService
+    fun updateSettingsFromFlutter(prefs: SharedPreferences, reminderEnabled: Boolean, maxSkips: Int) {
+        prefs.edit()
+            .putBoolean(PREF_REMINDER_ENABLED, reminderEnabled)
+            .putInt(PREF_MAX_SKIPS, maxSkips)
+            .apply()
+        Log.d(TAG, "Updated settings: reminderEnabled=$reminderEnabled, maxSkips=$maxSkips")
+    }
+
+
+    
 
 
     
@@ -589,7 +694,7 @@ class MyForegroundService : Service() {
 
     private fun handleUserConfirmation(prayer: String) {
         Log.d(TAG, "User confirmed silence for $prayer - will activate in 5 minutes")
-        
+        resetSkipCount()
         // Show a notification that DND will be activated soon
         sendNotification(
             "Silence Scheduled",
@@ -621,12 +726,27 @@ class MyForegroundService : Service() {
         scheduleSoundRestore(prayer, DND_ACTIVATION_DELAY + DND_DURATION)
     }
 
+
     private fun handleUserDecline() {
-        Log.d(TAG, "User declined silence")
+        Log.d(TAG, "Handling user decline of prayer silence")
+        val limitReached = incrementSkipCount()
+        if (limitReached) {
+            Log.w(TAG, "Skip limit reached after user decline - showing notification")
+            currentPrayer?.let { 
+                
+                showSkipLimitNotification(it) 
+            } ?: run {
+                Log.e(TAG, "Couldn't show skip limit notification - current prayer is null")
+            }
+        } else {
+            Log.d(TAG, "Skip count incremented but limit not reached yet")
+        }
+        
+        Log.d(TAG, "User declined silence - canceling notification")
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).apply {
             cancel(NOTIF_ID_SILENCE_PROMPT)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && isNotificationPolicyAccessGranted) {
-                setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+                Log.d(TAG, "Notification policy access granted")
             }
         }
     }

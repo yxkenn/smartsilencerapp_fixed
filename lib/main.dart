@@ -4,6 +4,7 @@ import 'smart_silencer_screen.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'smartsilencerclass.dart';
+import 'reminder.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -71,7 +72,8 @@ class _MainNavigationState extends State<MainNavigation> {
   final List<Widget> _widgetOptions = <Widget>[
     PrayerTimesPage(),
     const SmartSilencerScreen(prayerTimes: {},),
-    const Center(child: Text('Reminder Screen Placeholder')),
+    ReminderSettingsScreen(),
+
     const Center(child: Text('Settings Screen Placeholder')),
   ];
 

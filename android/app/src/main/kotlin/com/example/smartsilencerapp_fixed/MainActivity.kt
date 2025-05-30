@@ -22,6 +22,8 @@ class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.example.smartsilencerapp_fixed/foreground"
     private val ALARMS_CHANNEL = "com.example.smartsilencerapp_fixed/alarms"
+    private val SETTINGS_CHANNEL = "com.example.smartsilencerapp_fixed/settings"
+
     private val LOCATION_PERMISSION_REQUEST_CODE = 1001
     private val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
     private val EXACT_ALARM_PERMISSION_REQUEST_CODE = 1003
@@ -95,10 +97,11 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "schedulePrayerAlarms" -> {
                     val mode = call.argument<String>("mode") ?: "notification"
-                    PreferenceManager.getDefaultSharedPreferences(context)
+                    getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
                         .edit()
                         .putString("silencer_mode", mode)
                         .apply()
+
 
                     val rawPrayerTimes = call.argument<Map<String, Any>>("prayerTimes")
                     if (rawPrayerTimes != null && rawPrayerTimes.isNotEmpty()) {
@@ -128,14 +131,15 @@ class MainActivity : FlutterActivity() {
                 "saveSilencerMode" -> {
                     val mode = call.argument<String>("mode")
                     if (mode != null) {
-                        PreferenceManager.getDefaultSharedPreferences(context)
-                            .edit()
-                            .putString("silencer_mode", mode)
-                            .apply()
+                        val prefs = context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                        prefs.edit().putString("silencer_mode", mode).apply()
+
+                        Log.d("PrayerAlarmManager", "✅ Saved silencer mode in native preferences: $mode")
                         result.success("Mode saved: $mode")
                     } else {
                         result.error("INVALID_MODE", "Mode was null", null)
                     }
+
                 }
 
                 "cancelAllAlarms" -> {
@@ -170,6 +174,26 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(flutterEngine?.dartExecutor?.binaryMessenger!!, SETTINGS_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "updateSettings" -> {
+                    val reminderEnabled = call.argument<Boolean>("reminderEnabled") ?: false
+                    val maxSkips = call.argument<Int>("maxSkips") ?: 3
+
+                    val prefs = getSharedPreferences("silencer_prefs", Context.MODE_PRIVATE)
+                    prefs.edit()
+                        .putBoolean("reminder_enabled", reminderEnabled)
+                        .putInt("max_skips", maxSkips)
+                        .apply()
+
+                    result.success(null)
+                }
+
+                else -> result.notImplemented()
+            }
+        }
+
 
         // Schedule daily rescheduler
         PrayerAlarmManager.setDailyMidnightAlarm(this)

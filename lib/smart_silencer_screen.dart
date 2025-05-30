@@ -29,11 +29,41 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    
+    // Load or default to 'notification'
+    final mode = prefs.getString('silencer_mode') ?? 'notification';
+    final enabled = prefs.getBool('silencer_enabled') ?? false;
+
+    // Save mode explicitly if not already saved
+    if (!prefs.containsKey('silencer_mode')) {
+      await prefs.setString('silencer_mode', mode);  // <-- ✅ force save
+      await saveSilencerModeToNative(mode);
+      print('💾 Saved default mode to prefs on first launch: $mode');
+    }
+
     setState(() {
-      _currentMode = prefs.getString('silencer_mode') ?? 'notification';
-      _isToggleOn = prefs.getBool('silencer_enabled') ?? false;
+      _currentMode = mode;
+      _isToggleOn = enabled;
     });
+
+    try {
+      // Sync mode with native
+      await saveSilencerModeToNative(mode);
+
+      // Schedule alarms
+      if (_lastPrayerTimes.isNotEmpty) {
+        await _alarmChannel.invokeMethod('schedulePrayerAlarms', {
+          'prayerTimes': _lastPrayerTimes,
+          'mode': mode,
+        });
+        print('✅ Initial alarm scheduling with mode: $mode');
+      }
+    } catch (e) {
+      print('❌ Error during initial settings load: $e');
+    }
   }
+
+
 
   Future<void> _saveToggleStatus(bool value) async {
     final prefs = await SharedPreferences.getInstance();
@@ -44,8 +74,10 @@ class _SmartSilencerScreenState extends State<SmartSilencerScreen> {
   Future<void> _saveMode(String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('silencer_mode', value);
+    await saveSilencerModeToNative(value);  // this one has the native call
     setState(() => _currentMode = value);
   }
+
 
   Future<void> _toggleDnd(bool enable) async {
     try {

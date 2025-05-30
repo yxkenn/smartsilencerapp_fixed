@@ -44,10 +44,8 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   Future<void> _initLocationAndPrayerTimes() async {
     final prefs = await SharedPreferences.getInstance();
-    
+    silencerMode = prefs.getString('silencer_mode') ?? 'gps';
 
-    
-    
 
     final lat = prefs.getDouble('latitude');
     final lon = prefs.getDouble('longitude');
@@ -103,20 +101,26 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
       return null;
     }
   }
+  
   Future<void> schedulePrayerAlarms(Map<String, DateTime> prayerTimes) async {
     try {
-      // Convert DateTime to milliseconds since epoch
-      final timesInMillis = prayerTimes.map((key, value) => 
-        MapEntry(key, value.millisecondsSinceEpoch));
-      
+      final timesInMillis = prayerTimes.map(
+        (key, value) => MapEntry(key, value.millisecondsSinceEpoch),
+      );
+
+      // Include the mode when scheduling alarms
       final result = await MethodChannel('com.example.smartsilencerapp_fixed/alarms')
-          .invokeMethod('schedulePrayerAlarms', {'prayerTimes': timesInMillis});
-      
-      print('Alarms scheduled successfully: $result');
+          .invokeMethod('schedulePrayerAlarms', {
+            'prayerTimes': timesInMillis,
+            'mode': silencerMode, // <-- use loaded mode
+          });
+
+      print('✅ Alarms scheduled successfully: $result');
     } on PlatformException catch (e) {
-      print('Failed to schedule alarms: ${e.message}');
+      print('❌ Failed to schedule alarms: ${e.message}');
     }
   }
+
 
   // -------------------- Prayer Time Logic --------------------
 
