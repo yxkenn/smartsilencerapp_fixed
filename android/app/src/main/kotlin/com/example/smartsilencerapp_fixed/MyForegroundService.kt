@@ -36,7 +36,7 @@ class MyForegroundService : Service() {
         const val ACTION_GPS_TIMEOUT = "gps_wait_timeout"
 
         const val GPS_CHECK_INTERVAL = 30_000L // 30 seconds
-        const val DND_DURATION = 40 * 60 * 1000L // 40 minutes
+        const val DND_DURATION = 25 * 60 * 1000L // 40 minutes
         const val GPS_WAIT_TIMEOUT = 15 * 60 * 1000L // 15 minutes
 
 
@@ -61,9 +61,9 @@ class MyForegroundService : Service() {
     private lateinit var locationRunnable: Runnable
     private var gpsWaitStartTime = 0L
 
-    private val mosqueLat = 33.815115
-    private val mosqueLon = 2.864548
-    private val mosqueRadiusMeters = 100.0
+    private val mosqueLat = 33.8131598
+    private val mosqueLon = 2.8649877
+    private val mosqueRadiusMeters = 200.0
 
     private lateinit var alarmManager: AlarmManager
     private lateinit var pendingAlarmIntent: PendingIntent
@@ -123,9 +123,10 @@ class MyForegroundService : Service() {
                     activateDnd(prayer)
                 }
                 
-                "restore_sound" -> {
-                    Log.d(TAG, "Restoring normal sound mode")
+                "restore_sound" -> {  // ✅ Now matches the intent action
+                    Log.d(TAG, "Received restore_sound command")
                     restoreNormalSoundMode()
+                    stopSelf()  // Optional: Stop service if no longer needed
                 }
                 
                 ACTION_ALARM_TRIGGER -> {

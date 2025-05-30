@@ -96,15 +96,11 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine?.dartExecutor?.binaryMessenger!!, ALARMS_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "schedulePrayerAlarms" -> {
-                    val mode = call.argument<String>("mode") ?: "notification"
-                    getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-                        .edit()
-                        .putString("silencer_mode", mode)
-                        .apply()
+                    try {
+                        val mode = call.argument<String>("mode") ?: "notification"
+                        val rawPrayerTimes = call.argument<Map<String, Any>>("prayerTimes") ?: emptyMap()
 
-
-                    val rawPrayerTimes = call.argument<Map<String, Any>>("prayerTimes")
-                    if (rawPrayerTimes != null && rawPrayerTimes.isNotEmpty()) {
+                        // Convert prayer times
                         val prayerTimes = rawPrayerTimes.mapValues { (_, v) ->
                             when (v) {
                                 is Int -> v.toLong()
@@ -112,22 +108,29 @@ class MainActivity : FlutterActivity() {
                                 is Double -> v.toLong()
                                 is String -> v.toLongOrNull() ?: 0L
                                 else -> 0L
+                            }.also { time ->
+                                if (time <= 0) throw IllegalArgumentException("Invalid time value")
                             }
                         }
 
-                        val alarmPrefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-                        alarmPrefs.edit().apply {
+                        // Save to prefs
+                        val prefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                        prefs.edit().apply {
+                            putString("silencer_mode", mode)
                             prayerTimes.forEach { (prayer, time) ->
                                 putLong("${AlarmReceiver.KEY_PRAYER_PREFIX}$prayer", time)
                             }
                             apply()
                         }
 
+                        // Schedule alarms
                         PrayerAlarmManager.schedulePrayerAlarms(this)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Alarm scheduling failed", e)
+                        result.error("SCHEDULING_FAILED", e.message, null)
                     }
-                    result.success(true)
                 }
-
                 "saveSilencerMode" -> {
                     val mode = call.argument<String>("mode")
                     if (mode != null) {

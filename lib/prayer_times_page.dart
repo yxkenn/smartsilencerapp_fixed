@@ -20,12 +20,27 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   bool locationPermissionGranted = false;
 
   static const platform = MethodChannel('com.example.smartsilencerapp_fixed/foreground');
+  static const reschedulerChannel = MethodChannel('com.example.smartsilencerapp_fixed/rescheduler');
   String silencerMode = "gps"; // default fallback
 
   @override
   void initState() {
     super.initState();
     _initLocationAndPrayerTimes();
+
+      // Setup method channel handler
+    reschedulerChannel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'updatePrayerTimesForNewDay':
+          await _calculatePrayerTimes(); // Recalculate for new day
+          return true;
+        default:
+          throw PlatformException(
+            code: 'not_implemented',
+            message: 'Method not implemented',
+          );
+      }
+    });
 
     timer = Timer.periodic(Duration(seconds: 1), (_) {
       setState(() {
@@ -124,7 +139,8 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   // -------------------- Prayer Time Logic --------------------
 
-  Future<void> _calculatePrayerTimes() async {
+
+  Future<void> _calculatePrayerTimes({bool forceUpdate = false}) async {
     if (coordinates == null) return;
 
     final params = CalculationMethod.muslim_world_league.getParameters();
@@ -133,11 +149,38 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     final now = DateTime.now();
     final date = DateComponents.from(now);
 
-    prayerTimes = PrayerTimes(coordinates!, date, params);
+    setState(() {
+      prayerTimes = PrayerTimes(coordinates!, date, params);
+    });
 
     await _storePrayerTimesToPrefs(prayerTimes!);
-    await startNativeSilencerService(prayerTimes!, silencerMode);
-    setState(() {});
+    
+    // Convert to map of milliseconds since epoch
+    final prayerTimesMap = {
+      'fajr': prayerTimes!.fajr.millisecondsSinceEpoch,
+      'dhuhr': prayerTimes!.dhuhr.millisecondsSinceEpoch,
+      'asr': prayerTimes!.asr.millisecondsSinceEpoch,
+      'maghrib': prayerTimes!.maghrib.millisecondsSinceEpoch,
+      'isha': prayerTimes!.isha.millisecondsSinceEpoch,
+    };
+
+    // Save to native side
+    final prefs = await SharedPreferences.getInstance();
+    final mode = prefs.getString('silencer_mode') ?? 'gps';
+    
+    try {
+      await MethodChannel('com.example.smartsilencerapp_fixed/alarms').invokeMethod(
+        'savePrayerTimesToNative',
+        {
+          'prayerTimes': prayerTimesMap,
+          'mode': mode,
+        },
+      );
+    } catch (e) {
+      print('Error saving times to native: $e');
+    }
+
+    await startNativeSilencerService(prayerTimes!, mode);
   }
 
   Future<void> _storePrayerTimesToPrefs(PrayerTimes pt) async {

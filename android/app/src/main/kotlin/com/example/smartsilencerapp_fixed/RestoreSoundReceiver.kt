@@ -11,7 +11,7 @@ class RestoreSoundReceiver : BroadcastReceiver() {
         Log.d("RestoreSoundReceiver", "Restoring normal sound mode")
         
         Intent(context, MyForegroundService::class.java).apply {
-            putExtra("action", "restore_sound")
+            action = "restore_sound"  // ✅ Set as ACTION, not extra
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(this)
             } else {

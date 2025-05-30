@@ -4,16 +4,34 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-
-import android.app.AlarmManager
-import android.app.PendingIntent
+import android.os.Build
+import androidx.core.content.ContextCompat
+import android.os.Handler
+import android.os.Looper
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            Log.d("BootReceiver", "✅ Device rebooted — Rescheduling alarms")
-            PrayerAlarmManager.schedulePrayerAlarms(context)
+        when (intent?.action) {
+            Intent.ACTION_BOOT_COMPLETED -> {
+                Log.d("BootReceiver", "✅ Device rebooted — Initializing")
+                
+                Handler(Looper.getMainLooper()).postDelayed({
+                    try {
+                        // 1. Reset daily scheduler
+                        PrayerAlarmManager.setDailyMidnightAlarm(context)
+                        
+                        // 2. Start service to calculate fresh times
+                        val serviceIntent = Intent(context, MyForegroundService::class.java).apply {
+                            action = "boot_complete"
+                        }
+                        ContextCompat.startForegroundService(context, serviceIntent)
+                        
+                        Log.d("BootReceiver", "✅ Initialization complete")
+                    } catch (e: Exception) {
+                        Log.e("BootReceiver", "❌ Initialization failed", e)
+                    }
+                }, 60_000L) // 60-second delay for more stability
+            }
         }
     }
 }
-
