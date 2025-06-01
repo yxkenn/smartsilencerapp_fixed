@@ -63,7 +63,7 @@ class MyForegroundService : Service() {
 
     private val mosqueLat = 33.8131598
     private val mosqueLon = 2.8649877
-    private val mosqueRadiusMeters = 200.0
+    private val mosqueRadiusMeters = 100
 
     private lateinit var alarmManager: AlarmManager
     private lateinit var pendingAlarmIntent: PendingIntent
@@ -86,19 +86,34 @@ class MyForegroundService : Service() {
             // Start as foreground service with proper type
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    startForeground(
-                        NOTIF_ID_FOREGROUND, 
-                        notification, 
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                    )
-                } catch (e: IllegalArgumentException) {
-                    // Fallback for manifest mismatch
-                    Log.w(TAG, "Using fallback foreground service start", e)
-                    startForeground(NOTIF_ID_FOREGROUND, notification)
+                    if (mode == "gps") {
+                        if (checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+
+                            startForeground(
+                                NOTIF_ID_FOREGROUND,
+                                notification,
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                            )
+                        } else {
+                            Log.e(TAG, "Missing location permissions — cannot start GPS mode")
+                            stopSelf()
+                            return START_NOT_STICKY
+                        }
+                    } else {
+                        // ✅ Safe for 'notification' or 'auto' mode
+                        startForeground(NOTIF_ID_FOREGROUND, notification)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to startForeground", e)
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
             } else {
                 startForeground(NOTIF_ID_FOREGROUND, notification)
             }
+
+
 
             // Process the incoming intent
             mode = intent?.getStringExtra("mode") ?: mode
@@ -218,6 +233,33 @@ class MyForegroundService : Service() {
     }
 
 
+    private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Foreground service channel (MUST EXIST)
+            NotificationChannel(CHANNEL_ID, "Foreground Service", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Background service notifications"
+                setShowBadge(false)
+            }.also { channel ->
+                getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            }
+
+            // Existing alerts channel
+            NotificationChannel(ALERTS_CHANNEL_ID, "Prayer Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Important prayer time notifications"
+                enableLights(true)
+                lightColor = Color.RED
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                setBypassDnd(true)
+            }.also { channel ->
+                getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            }
+        }
+    }
+
+
     private fun showSkipLimitNotification(prayer: String) {
         Log.d(TAG, "Showing skip limit notification for prayer: $prayer")
 
@@ -236,36 +278,24 @@ class MyForegroundService : Service() {
     }
 
 
-    private fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // For prayer alerts channel:
-            NotificationChannel(ALERTS_CHANNEL_ID, "Prayer Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Important prayer time notifications"
-                enableLights(true)       // Turns on LED light
-                lightColor = Color.RED   // Makes LED red
-                enableVibration(true)   // Phone will vibrate
-                vibrationPattern = longArrayOf(0, 500, 200, 500) // Vibrate pattern (wait, vibrate, wait, vibrate)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC // Shows on lock screen
-                setSound(null, null)     // No sound (since we're using vibration)
-                setBypassDnd(true)       // Shows even in Do Not Disturb mode
-            }.also { channel ->
-                getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-            }
-        }
-    }
+
 
     private fun buildForegroundNotification(content: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Smart Silencer")
             .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_lock_silent_mode)
+            .setSmallIcon(R.drawable.ic_menu_mylocation) // MUST be a valid icon
             .setContentIntent(
                 PendingIntent.getActivity(
-                    this, 0, Intent(this, MainActivity::class.java),
+                    this, 
+                    0, 
+                    Intent(this, MainActivity::class.java),
                     PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
                 )
             )
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
             .build()
     }
 
@@ -575,22 +605,36 @@ class MyForegroundService : Service() {
 
     private fun activateDnd(prayer: String) {
         Log.d(TAG, "Activating DND for $prayer")
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).takeIf {
-                it.isNotificationPolicyAccessGranted
-            }?.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
+            if (notificationManager.isNotificationPolicyAccessGranted) {
+                notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
+            } else {
+                Log.w(TAG, "DND access NOT granted. Prompting user.")
+                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                startActivity(intent) // ✅ This opens DND permission settings
+            }
         }
+
         scheduleSoundRestore(prayer, DND_DURATION)
     }
 
+
     private fun restoreNormalSoundMode() {
         Log.d(TAG, "Restoring normal sound mode")
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).takeIf {
-                it.isNotificationPolicyAccessGranted
-            }?.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+            if (notificationManager.isNotificationPolicyAccessGranted) {
+                notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+            } else {
+                Log.w(TAG, "Cannot restore sound — no DND access")
+            }
         }
     }
+
     
     private fun handleGpsTimeout(prayer: String) {
         Log.d(TAG, "Handling GPS timeout for prayer: $prayer")

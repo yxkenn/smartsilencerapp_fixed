@@ -64,7 +64,18 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
 
-                    checkBatteryOptimization()
+                    checkBatteryOptimizationOnce()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // Android 14+
+                        val hasFgsLoc = ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        val hasFineLoc = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+                        if (!hasFgsLoc || !hasFineLoc) {
+                            result.error("PERMISSION_DENIED", "Missing required location permissions", null)
+                            return@setMethodCallHandler
+                        }
+                    }
+
+
                     startForegroundService(mode, prayerTimes)
                     result.success("Service started")
                 }
@@ -205,17 +216,31 @@ class MainActivity : FlutterActivity() {
     // ------------------ Helper Methods ------------------
 
     private fun hasLocationPermissions(): Boolean {
-        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-               ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasStandardLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        
+        val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true // Permission not required before Android 10
+        }
+        
+        return hasStandardLocation && hasFgsLocation
     }
 
     private fun requestLocationPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
+        }
+        
         ActivityCompat.requestPermissions(
             this,
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ),
+            permissions.toTypedArray(),
             LOCATION_PERMISSION_REQUEST_CODE
         )
     }
@@ -244,14 +269,25 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun checkBatteryOptimization() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val packageName = packageName
-        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            startActivity(intent)
+    private fun checkBatteryOptimizationOnce() {
+        val prefs = getSharedPreferences("silencer_prefs", Context.MODE_PRIVATE)
+        val alreadyPrompted = prefs.getBoolean("battery_opt_prompted", false)
+
+        if (!alreadyPrompted) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val packageName = packageName
+
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                intent.data = Uri.parse("package:$packageName")
+
+                startActivity(intent)
+
+                prefs.edit().putBoolean("battery_opt_prompted", true).apply()
+            }
         }
     }
+
 
     private fun startForegroundService(mode: String, prayerTimes: Map<String, Long>) {
         val intent = Intent(this, MyForegroundService::class.java).apply {

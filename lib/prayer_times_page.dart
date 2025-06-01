@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hijri/hijri_calendar.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 
 class PrayerTimesPage extends StatefulWidget {
@@ -250,6 +251,27 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     }
 
     return false;
+  }
+
+    Future<void> startServiceWithPermissions(String mode, PrayerTimes pt) async {
+    final location = await Permission.location.request();
+    final notification = await Permission.notification.request();
+
+    if (location.isGranted && notification.isGranted) {
+      await platform.invokeMethod('startService', {
+        'mode': mode,
+        'prayerTimes': {
+          'fajr': pt.fajr.millisecondsSinceEpoch,
+          'dhuhr': pt.dhuhr.millisecondsSinceEpoch,
+          'asr': pt.asr.millisecondsSinceEpoch,
+          'maghrib': pt.maghrib.millisecondsSinceEpoch,
+          'isha': pt.isha.millisecondsSinceEpoch,
+        }
+      });
+    } else {
+      print("Permissions denied.");
+      openAppSettings(); // Optional fallback
+    }
   }
 
   Future<void> startNativeSilencerService(PrayerTimes pt, String mode) async {
