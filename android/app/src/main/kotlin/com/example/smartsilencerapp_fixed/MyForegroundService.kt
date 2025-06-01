@@ -164,6 +164,7 @@ class MyForegroundService : Service() {
                 ACTION_SKIP_LIMIT_REACHED -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     showSkipLimitNotification(prayer)
+
                 }
                     
                 
@@ -194,23 +195,42 @@ class MyForegroundService : Service() {
         return getSharedPreferences("silencer_prefs", Context.MODE_PRIVATE)
     }
 
-    private fun incrementSkipCount(): Boolean {
-        val prefs = getPrefs()
-        val currentSkips = prefs.getInt(PREF_SKIP_COUNT, 0)
-        val maxSkips = prefs.getInt(PREF_MAX_SKIPS, 3)
-        val newSkips = currentSkips + 1
-
-        Log.d(TAG, "Incrementing skip count. Current: $currentSkips, Max: $maxSkips, New: $newSkips")
-
-        return if (newSkips >= maxSkips) {
-            Log.w(TAG, "Skip limit reached! Current skips: $newSkips (max: $maxSkips)")
-            resetSkipCount() // ✅ Use your existing method
-            true
-        } else {
-            prefs.edit().putInt(PREF_SKIP_COUNT, newSkips).apply()
-            false
-        }
+    private fun getPrayerSkipKey(prayer: String): String {
+        return "skip_count_$prayer"
     }
+
+
+    private fun incrementSkipCount(prayer: String): Boolean {
+        val prefs = getPrefs()
+        val generalSkips = prefs.getInt(PREF_SKIP_COUNT, 0)
+        val maxSkips = prefs.getInt(PREF_MAX_SKIPS, 3)
+        val newGeneralSkips = generalSkips + 1
+
+        // Update general skip count
+        prefs.edit().putInt(PREF_SKIP_COUNT, newGeneralSkips).apply()
+
+        Log.d(TAG, "General skips: $newGeneralSkips / $maxSkips")
+
+        // Update prayer-specific skip count
+        val prayerKey = getPrayerSkipKey(prayer)
+        val prayerSkips = prefs.getInt(prayerKey, 0) + 1
+        prefs.edit().putInt(prayerKey, prayerSkips).apply()
+
+        Log.d(TAG, "Prayer-specific skips for $prayer: $prayerSkips / $maxSkips")
+
+        // If either limit reached
+        if (newGeneralSkips >= maxSkips) {
+            resetSkipCount() // Reset general after reaching limit
+            return true
+        }
+
+        if (prayerSkips >= maxSkips) {
+            showPrayerSpecificSkipNotification(prayer)
+        }
+
+        return false
+    }
+
 
 
     private fun resetSkipCount() {
@@ -279,6 +299,22 @@ class MyForegroundService : Service() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIF_ID_SILENCE_PROMPT + 1000, notification) // 💡 bump ID to avoid conflicts
     }
+
+    private fun showPrayerSpecificSkipNotification(prayer: String) {
+        Log.d(TAG, "Showing prayer-specific skip notification for $prayer")
+
+        val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
+            .setContentTitle("🚨 Missed $prayer Too Often")
+            .setContentText("You've skipped $prayer prayer several times. Try not to miss it.")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIF_ID_SILENCE_PROMPT + prayer.hashCode(), notification)
+    }
+
 
 
 
@@ -667,7 +703,8 @@ class MyForegroundService : Service() {
     
     private fun handleGpsTimeout(prayer: String) {
         Log.d(TAG, "Handling GPS timeout for prayer: $prayer")
-        val limitReached = incrementSkipCount()
+        val limitReached = incrementSkipCount(currentPrayer ?: return)
+
         if (limitReached) {
             Log.w(TAG, "Skip limit reached after GPS timeout - showing notification")
             showSkipLimitNotification(prayer)
@@ -803,7 +840,9 @@ class MyForegroundService : Service() {
 
     private fun handleUserDecline() {
         Log.d(TAG, "Handling user decline of prayer silence")
-        val limitReached = incrementSkipCount()
+        val limitReached = incrementSkipCount(currentPrayer ?: return)
+
+
         if (limitReached) {
             Log.w(TAG, "Skip limit reached after user decline - showing notification")
             currentPrayer?.let { 
