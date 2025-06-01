@@ -57,6 +57,9 @@ class MyForegroundService : Service() {
     private var prayerTimesMap: Map<String, Long> = emptyMap()
     private var mode: String = "notification"
 
+    private var dndWasAlreadyEnabled = false
+
+
     private lateinit var locationHandler: Handler
     private lateinit var locationRunnable: Runnable
     private var gpsWaitStartTime = 0L
@@ -609,17 +612,26 @@ class MyForegroundService : Service() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (notificationManager.isNotificationPolicyAccessGranted) {
+                val currentFilter = notificationManager.currentInterruptionFilter
+                if (currentFilter == NotificationManager.INTERRUPTION_FILTER_NONE) {
+                    Log.d(TAG, "DND is already enabled - skipping activation")
+                    setAppEnabledDnd(false)  // mark that we didn't touch it
+                    return
+                }
+
                 notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE)
+                setAppEnabledDnd(true)
             } else {
                 Log.w(TAG, "DND access NOT granted. Prompting user.")
                 val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
                 intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(intent) // ✅ This opens DND permission settings
+                startActivity(intent)
             }
         }
 
         scheduleSoundRestore(prayer, DND_DURATION)
     }
+
 
 
     private fun restoreNormalSoundMode() {
@@ -628,12 +640,29 @@ class MyForegroundService : Service() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (notificationManager.isNotificationPolicyAccessGranted) {
+                if (!wasAppEnabledDnd()) {
+                    Log.d(TAG, "Skipping restore — DND was already enabled before app ran")
+                    return
+                }
+
                 notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+                setAppEnabledDnd(false)  // clear flag after restoring
             } else {
                 Log.w(TAG, "Cannot restore sound — no DND access")
             }
         }
     }
+
+
+    private fun setAppEnabledDnd(enabled: Boolean) {
+        getPrefs().edit().putBoolean("app_enabled_dnd", enabled).apply()
+    }
+
+    private fun wasAppEnabledDnd(): Boolean {
+        return getPrefs().getBoolean("app_enabled_dnd", false)
+    }
+
+
 
     
     private fun handleGpsTimeout(prayer: String) {
