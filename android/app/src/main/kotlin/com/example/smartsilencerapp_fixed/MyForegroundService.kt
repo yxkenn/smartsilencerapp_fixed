@@ -30,6 +30,8 @@ class MyForegroundService : Service() {
         const val NOTIF_ID_SILENCE_PROMPT = 2
         const val NOTIF_ID_GPS_PROMPT = 3
 
+        const val PERMISSION_REQUEST_CODE = 1004
+
         const val ACTION_ALARM_TRIGGER = "com.example.smartsilencerapp_fixed.ACTION_ALARM_TRIGGER"
         const val ACTION_USER_CONFIRMED = "user_confirmed_silence"
         const val ACTION_USER_DECLINED = "user_declined_silence"
@@ -83,10 +85,16 @@ class MyForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            // Build the foreground notification
+            // ✅ Extract mode and prayer before starting anything
+            mode = intent?.getStringExtra("mode") ?: mode
+            currentPrayer = intent?.getStringExtra("prayer") ?: currentPrayer
+
+            Log.d(TAG, "Service started with action=${intent?.action}, mode=$mode")
+
+            // ✅ Build notification after mode is known
             val notification = buildForegroundNotification("Initializing silencer...")
-            
-            // Start as foreground service with proper type
+
+            // ✅ Handle foreground service with location type if needed
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
                     if (mode == "gps") {
@@ -104,7 +112,6 @@ class MyForegroundService : Service() {
                             return START_NOT_STICKY
                         }
                     } else {
-                        // ✅ Safe for 'notification' or 'auto' mode
                         startForeground(NOTIF_ID_FOREGROUND, notification)
                     }
                 } catch (e: Exception) {
@@ -116,37 +123,31 @@ class MyForegroundService : Service() {
                 startForeground(NOTIF_ID_FOREGROUND, notification)
             }
 
-
-
-            // Process the incoming intent
-            mode = intent?.getStringExtra("mode") ?: mode
-            currentPrayer = intent?.getStringExtra("prayer") ?: currentPrayer
-            Log.d(TAG, "Service started with action=${intent?.action}, mode=$mode")
-
+            // ✅ Process the intent actions
             when (intent?.action) {
                 ACTION_USER_CONFIRMED -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     Log.d(TAG, "User confirmed silence for $prayer")
                     handleUserConfirmation(prayer)
                 }
-                
+
                 ACTION_USER_DECLINED -> {
                     Log.d(TAG, "User declined silence")
                     handleUserDecline()
                 }
-                
+
                 "silence_now" -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     Log.d(TAG, "Immediate silence requested for $prayer")
                     activateDnd(prayer)
                 }
-                
-                "restore_sound" -> {  // ✅ Now matches the intent action
+
+                "restore_sound" -> {
                     Log.d(TAG, "Received restore_sound command")
                     restoreNormalSoundMode()
-                    stopSelf()  // Optional: Stop service if no longer needed
+                    stopSelf()  // ✅ Stop service if work is done
                 }
-                
+
                 ACTION_ALARM_TRIGGER -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     mode = intent.getStringExtra("mode") ?: mode
@@ -157,36 +158,34 @@ class MyForegroundService : Service() {
                 "GPS_NOTIFICATION_DISMISSED" -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     Log.d(TAG, "GPS notification dismissed for $prayer")
-                    // You could add additional handling here if needed
+                    // Optional: handle dismissal logic
                 }
-
 
                 ACTION_SKIP_LIMIT_REACHED -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     showSkipLimitNotification(prayer)
-
                 }
-                    
-                
+
                 else -> {
                     val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
-                    mode = intent?.getStringExtra("mode") ?: mode
+                    mode = intent.getStringExtra("mode") ?: mode
                     Log.d(TAG, "Default case - running silencer for $prayer")
                     runSilencerLogic(prayer)
                 }
             }
-            
+
         } catch (e: SecurityException) {
             Log.e(TAG, "Security exception in foreground service", e)
             stopSelf()
+            return START_NOT_STICKY
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in foreground service", e)
-            // Try to restart if possible
             return START_REDELIVER_INTENT
         }
-        
+
         return START_STICKY
     }
+
 
 
 
@@ -339,6 +338,18 @@ class MyForegroundService : Service() {
     }
 
     private fun handleGpsMode(prayer: String) {
+        if (!checkLocationPermissions()) {
+            Log.w(TAG, "Cannot start GPS mode - missing permissions")
+            sendNotification(
+                "Permissions Required",
+                "Location permissions are needed for GPS mode",
+                NOTIF_ID_GPS_PROMPT
+            )
+            stopSelf()
+            return
+        }
+
+
         Log.d(TAG, "Handling GPS mode for $prayer")
         if (!isGpsEnabled()) {
             Log.d(TAG, "GPS not enabled - starting waiting loop")
@@ -467,13 +478,18 @@ class MyForegroundService : Service() {
     }
 
     private fun checkLocationPermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-            checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
+        val hasFineLocation = checkSelfPermission(
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        
+        val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            checkSelfPermission(
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+        
+        return hasFineLocation && hasFgsLocation
+}
 
     private fun showGpsWaitingNotification(prayer: String) {
         try {
@@ -670,6 +686,12 @@ class MyForegroundService : Service() {
 
 
 
+
+    // Add this helper method in MyForegroundService
+  
+
+
+
     private fun restoreNormalSoundMode() {
         Log.d(TAG, "Restoring normal sound mode")
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -779,6 +801,7 @@ class MyForegroundService : Service() {
     }
 
     private fun isInMosqueZone(): Boolean {
+        if (!checkLocationPermissions()) return false
         val location = getLastKnownLocation() ?: return false
         val distance = location.distanceTo(Location("").apply {
             latitude = mosqueLat
@@ -789,6 +812,7 @@ class MyForegroundService : Service() {
     }
 
     private fun getLastKnownLocation(): Location? {
+        if (!checkLocationPermissions()) return null
         return (getSystemService(Context.LOCATION_SERVICE) as LocationManager).run {
             getProviders(true).mapNotNull { provider ->
                 try {

@@ -6,6 +6,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'smartsilencerclass.dart';
 import 'reminder.dart';
 
+import 'weekly_preferences_screen.dart';
+
+
+
+
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
@@ -73,8 +78,7 @@ class _MainNavigationState extends State<MainNavigation> {
     PrayerTimesPage(),
     const SmartSilencerScreen(prayerTimes: {},),
     ReminderSettingsScreen(),
-
-    const Center(child: Text('Settings Screen Placeholder')),
+    WeeklyPreferencesScreen()
   ];
 
   void _onItemTapped(int index) {

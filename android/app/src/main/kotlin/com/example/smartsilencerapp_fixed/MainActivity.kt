@@ -18,6 +18,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
 import java.util.*
 
+
 class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.example.smartsilencerapp_fixed/foreground"
@@ -185,6 +186,61 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
+
+                "saveWeeklyPreferences" -> {
+                    try {
+                        val preferences = call.argument<Map<String, Map<String, String>>>("preferences")
+                        if (preferences != null) {
+                             Log.d("MainActivity", "Received weekly preferences from Flutter: $preferences")
+                            saveWeeklyPreferences(preferences)
+                            result.success(true)
+                        } else {
+                            Log.e("MainActivity", "Received null preferences data")
+                            result.error("INVALID_DATA", "Preferences data was null", null)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error saving weekly preferences", e)
+                        result.error("SAVE_FAILED", e.message, null)
+                    }
+                }
+
+                "loadWeeklyPreferences" -> {
+                    try {
+                        val prefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                        val allPrefs = prefs.all.filter { it.key.startsWith("pref_") }
+                        
+                        // Convert to Flutter-friendly format
+                        val resultMap = mutableMapOf<String, MutableMap<String, String>>()
+                        
+                        // Initialize all days
+                        val days = listOf(
+                            "sunday" to Calendar.SUNDAY,
+                            "monday" to Calendar.MONDAY,
+                            "tuesday" to Calendar.TUESDAY,
+                            "wednesday" to Calendar.WEDNESDAY,
+                            "thursday" to Calendar.THURSDAY,
+                            "friday" to Calendar.FRIDAY,
+                            "saturday" to Calendar.SATURDAY
+                        )
+                        
+                        val prayers = listOf("fajr", "dhuhr", "asr", "maghrib", "isha")
+                        
+                        days.forEach { (dayName, dayValue) ->
+                            val dayMap = mutableMapOf<String, String>()
+                            prayers.forEach { prayer ->
+                                val key = "pref_${dayValue}_$prayer"
+                                dayMap[prayer] = prefs.getString(key, "DEFAULT") ?: "DEFAULT"
+                            }
+                            resultMap[dayName] = dayMap
+                        }
+                        
+                        result.success(resultMap)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error loading weekly preferences", e)
+                        result.error("LOAD_FAILED", e.message, null)
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -214,16 +270,48 @@ class MainActivity : FlutterActivity() {
     }
 
     // ------------------ Helper Methods ------------------
-
-    private fun hasLocationPermissions(): Boolean {
-        val hasStandardLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    // In MainActivity.kt
+    private fun hasRequiredPermissions(): Boolean {
+        val hasStandardLocation = ContextCompat.checkSelfPermission(this, 
+            Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         
         val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true // Permission not required before Android 10
+            ContextCompat.checkSelfPermission(this, 
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else true
+        
+        return hasStandardLocation && hasFgsLocation
+    }
+
+    private fun requestRequiredPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
         }
+        
+        ActivityCompat.requestPermissions(
+            this,
+            permissions.toTypedArray(),
+            LOCATION_PERMISSION_REQUEST_CODE
+        )
+    }
+
+
+
+    private fun hasLocationPermissions(): Boolean {
+        val hasStandardLocation = ContextCompat.checkSelfPermission(this, 
+            Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, 
+                Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        
+        val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(this, 
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else true
         
         return hasStandardLocation && hasFgsLocation
     }
@@ -243,6 +331,44 @@ class MainActivity : FlutterActivity() {
             permissions.toTypedArray(),
             LOCATION_PERMISSION_REQUEST_CODE
         )
+    }
+
+
+    private fun saveWeeklyPreferences(preferences: Map<String, Map<String, String>>) {
+        val prefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        Log.d("MainActivity", "Saving weekly preferences - input data: $preferences")
+        
+        prefs.edit().apply {
+            preferences.forEach { (day, prayerPrefs) ->
+                val dayInt = when (day) {
+                    "sunday" -> Calendar.SUNDAY
+                    "monday" -> Calendar.MONDAY
+                    "tuesday" -> Calendar.TUESDAY
+                    "wednesday" -> Calendar.WEDNESDAY
+                    "thursday" -> Calendar.THURSDAY
+                    "friday" -> Calendar.FRIDAY
+                    "saturday" -> Calendar.SATURDAY
+                    else -> {
+                        Log.w("MainActivity", "Invalid day name: $day")
+                        return@forEach
+                    }
+                }
+                
+                Log.d("MainActivity", "Processing day: $day (int value: $dayInt)")
+                
+                prayerPrefs.forEach { (prayer, pref) ->
+                    val key = "pref_${dayInt}_$prayer"
+                    Log.d("MainActivity", "Saving preference - key: $key, value: $pref")
+                    putString(key, pref)
+                }
+            }
+            apply()
+        }
+        Log.d("MainActivity", "Weekly preferences saved successfully")
+        
+        // Verify saved preferences
+        val allPrefs = prefs.all.filter { it.key.startsWith("pref_") }
+        Log.d("MainActivity", "Current saved preferences: $allPrefs")
     }
 
     private fun hasNotificationPolicyAccess(): Boolean {
