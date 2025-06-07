@@ -21,6 +21,11 @@ import java.util.*
 
 class MainActivity : FlutterActivity() {
 
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val CHANNEL = "com.example.smartsilencerapp_fixed/foreground"
     private val ALARMS_CHANNEL = "com.example.smartsilencerapp_fixed/alarms"
     private val SETTINGS_CHANNEL = "com.example.smartsilencerapp_fixed/settings"
@@ -47,7 +52,7 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
 
-                    if (!hasLocationPermissions()) {
+                    if (!AlarmReceiver.hasRequiredPermissions(this)) {
                         requestLocationPermissions()
                         result.error("LOCATION_PERMISSION", "Location permissions are required", null)
                         return@setMethodCallHandler
@@ -74,6 +79,13 @@ class MainActivity : FlutterActivity() {
                             result.error("PERMISSION_DENIED", "Missing required location permissions", null)
                             return@setMethodCallHandler
                         }
+                    }
+
+                    // In the startService method handler
+                    if (!verifyAllPermissions()) {
+                        requestAllNeededPermissions()
+                        result.error("PERMISSION_DENIED", "Required permissions not granted", null)
+                        return@setMethodCallHandler
                     }
 
 
@@ -271,16 +283,72 @@ class MainActivity : FlutterActivity() {
 
     // ------------------ Helper Methods ------------------
     // In MainActivity.kt
-    private fun hasRequiredPermissions(): Boolean {
-        val hasStandardLocation = ContextCompat.checkSelfPermission(this, 
-            Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        
-        val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ContextCompat.checkSelfPermission(this, 
-                Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+   
+    private fun verifyAllPermissions(): Boolean {
+        val hasLocation = hasLocationPermissions()
+        val canScheduleAlarms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            canScheduleExactAlarms()
         } else true
         
-        return hasStandardLocation && hasFgsLocation
+        Log.d(TAG, "Permission Verification - Location: $hasLocation, ExactAlarms: $canScheduleAlarms")
+        
+        return hasLocation && canScheduleAlarms
+    }
+
+    private fun requestAllNeededPermissions() {
+        val permissionsNeeded = mutableListOf<String>()
+        
+        // Check location permissions
+        if (!hasLocationPermissions()) {
+            permissionsNeeded.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            permissionsNeeded.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                permissionsNeeded.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
+            }
+        }
+
+        // Request permissions if needed
+        if (permissionsNeeded.isNotEmpty()) {
+            ActivityCompat.requestPermissions(
+                this,
+                permissionsNeeded.toTypedArray(),
+                LOCATION_PERMISSION_REQUEST_CODE
+            )
+        }
+
+        // Handle exact alarms for Android 12+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !canScheduleExactAlarms()) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch exact alarm settings", e)
+                // Fallback for devices that don't support the exact alarm intent
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+                startActivity(intent)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        
+        when (requestCode) {
+            LOCATION_PERMISSION_REQUEST_CODE -> {
+                if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                    Log.d(TAG, "Location permissions granted")
+                } else {
+                    Log.w(TAG, "Some location permissions denied")
+                }
+            }
+        }
     }
 
     private fun requestRequiredPermissions() {

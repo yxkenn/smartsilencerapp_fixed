@@ -86,7 +86,12 @@ class MyForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             // ✅ Extract mode and prayer before starting anything
-            mode = intent?.getStringExtra("mode") ?: mode
+            // Avoid fallback to potentially incorrect value
+            val newMode = intent?.getStringExtra("mode")
+            if (newMode != null) {
+                mode = newMode
+            }
+
             currentPrayer = intent?.getStringExtra("prayer") ?: currentPrayer
 
             Log.d(TAG, "Service started with action=${intent?.action}, mode=$mode")
@@ -95,33 +100,8 @@ class MyForegroundService : Service() {
             val notification = buildForegroundNotification("Initializing silencer...")
 
             // ✅ Handle foreground service with location type if needed
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    if (mode == "gps") {
-                        if (checkSelfPermission(Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-                            checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            startForegroundSafe(notification)
 
-                            startForeground(
-                                NOTIF_ID_FOREGROUND,
-                                notification,
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                            )
-                        } else {
-                            Log.e(TAG, "Missing location permissions — cannot start GPS mode")
-                            stopSelf()
-                            return START_NOT_STICKY
-                        }
-                    } else {
-                        startForeground(NOTIF_ID_FOREGROUND, notification)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to startForeground", e)
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
-            } else {
-                startForeground(NOTIF_ID_FOREGROUND, notification)
-            }
 
             // ✅ Process the intent actions
             when (intent?.action) {
@@ -150,7 +130,11 @@ class MyForegroundService : Service() {
 
                 ACTION_ALARM_TRIGGER -> {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
-                    mode = intent.getStringExtra("mode") ?: mode
+                    val actionMode = intent.getStringExtra("mode")
+                    if (actionMode != null) {
+                        mode = actionMode
+                    }
+
                     Log.d(TAG, "Alarm triggered for $prayer in $mode mode")
                     runSilencerLogic(prayer)
                 }
@@ -168,7 +152,11 @@ class MyForegroundService : Service() {
 
                 else -> {
                     val prayer = intent?.getStringExtra("prayer") ?: return START_STICKY
-                    mode = intent.getStringExtra("mode") ?: mode
+                    val actionMode = intent.getStringExtra("mode")
+                    if (actionMode != null) {
+                        mode = actionMode
+                    }
+
                     Log.d(TAG, "Default case - running silencer for $prayer")
                     runSilencerLogic(prayer)
                 }
@@ -478,8 +466,13 @@ class MyForegroundService : Service() {
     }
 
     private fun checkLocationPermissions(): Boolean {
+        Log.e(TAG, "Missing location permissions - requesting...")
         val hasFineLocation = checkSelfPermission(
             Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        
+        val hasCoarseLocation = checkSelfPermission(
+            Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
         
         val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -488,8 +481,8 @@ class MyForegroundService : Service() {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         
-        return hasFineLocation && hasFgsLocation
-}
+        return (hasFineLocation || hasCoarseLocation) && hasFgsLocation
+    }
 
     private fun showGpsWaitingNotification(prayer: String) {
         try {
@@ -565,6 +558,31 @@ class MyForegroundService : Service() {
     }
 
 
+    private fun startForegroundSafe(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Use the correct service type based on mode
+                val serviceType = when {
+                    mode == "gps" && AlarmReceiver.hasLocationPermissions(this) -> 
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                    else -> 
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(NOTIF_ID_FOREGROUND, notification, serviceType)
+            } else {
+                startForeground(NOTIF_ID_FOREGROUND, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting foreground", e)
+            // Fallback to regular start if foreground fails
+            try {
+                startForeground(NOTIF_ID_FOREGROUND, notification)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Couldn't start foreground at all", e2)
+                stopSelf()
+            }
+        }
+    }
 
 
     private fun sendSilencePromptNotification(prayer: String) {

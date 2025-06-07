@@ -64,20 +64,48 @@ class AlarmReceiver : BroadcastReceiver() {
             }
         }
 
-        fun hasRequiredPermissions(context: Context): Boolean {
-            val hasFineLocation = ContextCompat.checkSelfPermission(
+        fun hasLocationPermissions(context: Context): Boolean {
+            return ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+            ) == PackageManager.PERMISSION_GRANTED && 
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || 
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.FOREGROUND_SERVICE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED)
+        }
 
-            val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.FOREGROUND_SERVICE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
+        fun hasRequiredPermissions(context: Context): Boolean {
+            // Location permissions (either fine or coarse is sufficient)
+            val hasFineLoc = ContextCompat.checkSelfPermission(context, 
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarseLoc = ContextCompat.checkSelfPermission(context,
+                Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            
+            // Foreground service location (required for Android 10+)
+            val hasFgsLoc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContextCompat.checkSelfPermission(context,
+                    Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            } else true
+            
+            // Exact alarms (required for Android 12+)
+            val hasExactAlarms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() ?: false)
             } else true
 
-            return hasFineLocation && hasFgsLocation
+            Log.d(TAG, "Permission Check - FineLoc: $hasFineLoc, CoarseLoc: $hasCoarseLoc, " +
+                    "FgsLoc: $hasFgsLoc, ExactAlarms: $hasExactAlarms")
+            
+            return (hasFineLoc || hasCoarseLoc) && hasFgsLoc && hasExactAlarms
+        }
+
+        private fun getImmutableFlag(): Int {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
         }
     }
 
@@ -125,11 +153,75 @@ class AlarmReceiver : BroadcastReceiver() {
                 return
             }
             PrayerPreference.CERTAIN -> {
-                Log.d(TAG, "🕌 Prayer $prayerName is certain today - forcing auto mode")
-                currentMode = MODE_AUTO
+                val prayerTime = intent?.getLongExtra("time", -1L) 
+                    ?: prefs.getLong("${KEY_PRAYER_PREFIX}$prayerName", -1L)
+                
+                if (prayerTime <= 0) {
+                    Log.e(TAG, "❌ No valid prayer time found for $prayerName")
+                    return
+                }
+
+                Log.d(TAG, "🕌 Prayer $prayerName is certain today - scheduling auto mode")
+                
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                
+                // Schedule DND activation
+                val activateIntent = Intent(context, MyForegroundService::class.java).apply {
+                    action = "silence_now"
+                    putExtra("prayer", prayerName)
+                    putExtra("mode", "auto")
+                }
+                
+                val pendingActivate = PendingIntent.getService(
+                    context,
+                    prayerName.hashCode() + 1,
+                    activateIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+                )
+                
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + AutoModeStarterService.DND_ACTIVATION_DELAY,
+                    pendingActivate
+                )
+                
+                // Schedule sound restore
+                val restoreIntent = Intent(context, RestoreSoundReceiver::class.java)
+                val pendingRestore = PendingIntent.getBroadcast(
+                    context,
+                    prayerName.hashCode() + 2,
+                    restoreIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+                )
+                
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + AutoModeStarterService.DND_ACTIVATION_DELAY + 
+                        AutoModeStarterService.DND_DURATION,
+                    pendingRestore
+                )
+                
+                return
             }
+
             PrayerPreference.DEFAULT -> {
                 Log.d(TAG, "🎛️ Prayer $prayerName uses default mode: $currentMode")
+
+                val serviceIntent = Intent(context, MyForegroundService::class.java).apply {
+                    // No action or use your custom action to trigger default silencer logic
+                    action = "run_silencer_logic"  // or just omit action so it hits default case
+                    putExtra("prayer", prayerName)
+                    putExtra("mode", currentMode)
+                }
+
+                try {
+                    ContextCompat.startForegroundService(context, serviceIntent)
+                    Log.d(TAG, "🚀 Started MyForegroundService with mode: $currentMode")
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Failed to start foreground service", e)
+                }
+
+
             }
         }
 
@@ -160,19 +252,6 @@ class AlarmReceiver : BroadcastReceiver() {
                 Log.w(TAG, "⛔ Missing required permissions - cannot start service")
                 showPermissionNotification(context)
                 return
-            }
-
-            Intent(context, MyForegroundService::class.java).apply {
-                action = MyForegroundService.ACTION_ALARM_TRIGGER
-                putExtra("prayer", prayerName)
-                putExtra("time", prayerTime)
-                putExtra("mode", currentMode)
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(this)
-                } else {
-                    context.startService(this)
-                }
             }
 
         } catch (e: SecurityException) {
