@@ -44,34 +44,51 @@ class MainActivity : FlutterActivity() {
                     val mode = call.argument<String>("mode") ?: "gps"
                     val prayerTimes = call.argument<Map<String, Long>>("prayerTimes") ?: emptyMap()
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE)
-                        result.error("NOTIFICATION_PERMISSION", "Notification permission is required", null)
-                        return@setMethodCallHandler
+                    // Mode-specific permission check
+                    val hasRequiredPerms = if (mode == "gps") {
+                        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    } else {
+                        AlarmReceiver.hasRequiredPermissions(this)
                     }
 
-                    if (!AlarmReceiver.hasRequiredPermissions(this)) {
+                    if (!hasRequiredPerms) {
                         requestLocationPermissions()
                         result.error("LOCATION_PERMISSION", "Location permissions are required", null)
                         return@setMethodCallHandler
                     }
 
+                    // Notification permission (Android 13+)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        ActivityCompat.requestPermissions(
+                            this,
+                            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                            NOTIFICATION_PERMISSION_REQUEST_CODE
+                        )
+                        result.error("NOTIFICATION_PERMISSION", "Notification permission is required", null)
+                        return@setMethodCallHandler
+                    }
+
+                    // Do Not Disturb access
                     if (!hasNotificationPolicyAccess()) {
                         requestNotificationPolicyAccess()
                         result.error("DND_PERMISSION", "Do Not Disturb access is required", null)
                         return@setMethodCallHandler
                     }
 
+                    // Exact alarm permission (Android 12+)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !canScheduleExactAlarms()) {
                         requestExactAlarmPermission()
                         result.error("EXACT_ALARM_PERMISSION", "Exact alarm permission is required", null)
                         return@setMethodCallHandler
                     }
 
+                    // Battery optimization notice
                     checkBatteryOptimizationOnce()
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // Android 14+
+
+                    // Android 14+ Foreground service location permission
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                         val hasFgsLoc = ContextCompat.checkSelfPermission(this, Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
                         val hasFineLoc = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
@@ -81,35 +98,15 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
-                    // In the startService method handler
+                    // Final catch-all permission check
                     if (!verifyAllPermissions()) {
                         requestAllNeededPermissions()
                         result.error("PERMISSION_DENIED", "Required permissions not granted", null)
                         return@setMethodCallHandler
                     }
 
-
                     startForegroundService(mode, prayerTimes)
                     result.success("Service started")
-                }
-
-                "toggleDnd" -> {
-                    val enable = call.argument<Boolean>("enable") ?: false
-                    val intent = Intent(this, MyForegroundService::class.java).apply {
-                        action = if (enable) "silence_now" else "restore_sound"
-                        putExtra("prayer", "manual_toggle")
-                    }
-                    ContextCompat.startForegroundService(this, intent)
-                    result.success("DND toggled to $enable")
-                }
-
-                "isServiceRunning" -> {
-                    result.success(isMyServiceRunning(MyForegroundService::class.java))
-                }
-
-                "requestDndPermission" -> {
-                    requestNotificationPolicyAccess()
-                    result.success(null)
                 }
 
                 else -> result.notImplemented()
@@ -371,17 +368,22 @@ class MainActivity : FlutterActivity() {
 
 
     private fun hasLocationPermissions(): Boolean {
-        val hasStandardLocation = ContextCompat.checkSelfPermission(this, 
-            Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(this, 
-                Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        // For GPS mode, we need FINE location
+        val hasFineLocation = ContextCompat.checkSelfPermission(this, 
+            Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         
+        // For other modes, coarse is acceptable
+        val hasCoarseLocation = ContextCompat.checkSelfPermission(this, 
+            Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            
         val hasFgsLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContextCompat.checkSelfPermission(this, 
                 Manifest.permission.FOREGROUND_SERVICE_LOCATION) == PackageManager.PERMISSION_GRANTED
         } else true
         
-        return hasStandardLocation && hasFgsLocation
+        // Return true only if we have the appropriate permissions for the current mode
+        return hasFineLocation && hasFgsLocation
+
     }
 
     private fun requestLocationPermissions() {

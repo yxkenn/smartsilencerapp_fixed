@@ -328,17 +328,12 @@ class MyForegroundService : Service() {
     private fun handleGpsMode(prayer: String) {
         if (!checkLocationPermissions()) {
             Log.w(TAG, "Cannot start GPS mode - missing permissions")
-            sendNotification(
-                "Permissions Required",
-                "Location permissions are needed for GPS mode",
-                NOTIF_ID_GPS_PROMPT
-            )
-            stopSelf()
+            // Fallback to notification mode
+            mode = "notification"
+            sendSilencePromptNotification(prayer)
             return
         }
 
-
-        Log.d(TAG, "Handling GPS mode for $prayer")
         if (!isGpsEnabled()) {
             Log.d(TAG, "GPS not enabled - starting waiting loop")
             startGpsWaitingLoop(prayer)
@@ -466,7 +461,6 @@ class MyForegroundService : Service() {
     }
 
     private fun checkLocationPermissions(): Boolean {
-        Log.e(TAG, "Missing location permissions - requesting...")
         val hasFineLocation = checkSelfPermission(
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
@@ -481,7 +475,12 @@ class MyForegroundService : Service() {
             ) == PackageManager.PERMISSION_GRANTED
         } else true
         
-        return (hasFineLocation || hasCoarseLocation) && hasFgsLocation
+        // For GPS mode we need fine location, for others coarse is acceptable
+        return if (mode == "gps") {
+            hasFineLocation && hasFgsLocation
+        } else {
+            (hasFineLocation || hasCoarseLocation) && hasFgsLocation
+        }
     }
 
     private fun showGpsWaitingNotification(prayer: String) {
@@ -831,19 +830,47 @@ class MyForegroundService : Service() {
 
     private fun getLastKnownLocation(): Location? {
         if (!checkLocationPermissions()) return null
-        return (getSystemService(Context.LOCATION_SERVICE) as LocationManager).run {
-            getProviders(true).mapNotNull { provider ->
-                try {
-                    if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                        getLastKnownLocation(provider)
-                    } else null
-                } catch (e: SecurityException) {
-                    Log.e(TAG, "Location permission error", e)
-                    null
+
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+
+        val hasFine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+        Log.d(TAG, "Permissions: fine=$hasFine, coarse=$hasCoarse")
+
+        val providers = locationManager.getProviders(true)
+        val locations = providers.mapNotNull { provider ->
+            try {
+                val location = locationManager.getLastKnownLocation(provider)
+                if (location != null) {
+                    Log.d(TAG, "✅ Location from $provider: $location")
+                } else {
+                    Log.w(TAG, "⚠️ No location from $provider")
                 }
-            }.maxByOrNull { it.time }
+                location
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException accessing $provider", e)
+                null
+            }
         }
+
+        val bestLocation = locations.maxByOrNull { it.time }
+
+        if (bestLocation == null && hasCoarse) {
+            // Fallback: try NETWORK_PROVIDER directly if no recent locations were found
+            try {
+                val fallbackLocation = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                Log.w(TAG, "⚠️ Fallback to NETWORK_PROVIDER: $fallbackLocation")
+                return fallbackLocation
+            } catch (e: Exception) {
+                Log.e(TAG, "Error accessing NETWORK_PROVIDER fallback", e)
+            }
+        }
+
+        Log.d(TAG, "📍 Best location selected: $bestLocation")
+        return bestLocation
     }
+
 
     private fun handleUserConfirmation(prayer: String) {
         Log.d(TAG, "User confirmed silence for $prayer - will activate in 5 minutes")
