@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:adhan/adhan.dart';
 import 'package:geolocator/geolocator.dart';
@@ -6,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hijri/hijri_calendar.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'localization.dart';
+import 'main.dart';
 
 
 class PrayerTimesPage extends StatefulWidget {
@@ -13,7 +16,8 @@ class PrayerTimesPage extends StatefulWidget {
   _PrayerTimesPageState createState() => _PrayerTimesPageState();
 }
 
-class _PrayerTimesPageState extends State<PrayerTimesPage> {
+class _PrayerTimesPageState extends State<PrayerTimesPage> with WidgetsBindingObserver {
+  // ... your existing state variables ...
   PrayerTimes? prayerTimes;
   DateTime? currentTime;
   Timer? timer;
@@ -27,22 +31,24 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   @override
   void initState() {
     super.initState();
-    _initLocationAndPrayerTimes();
-
-      // Setup method channel handler
-    reschedulerChannel.setMethodCallHandler((call) async {
-      switch (call.method) {
-        case 'updatePrayerTimesForNewDay':
-          await _calculatePrayerTimes(); // Recalculate for new day
-          return true;
-        default:
-          throw PlatformException(
-            code: 'not_implemented',
-            message: 'Method not implemented',
-          );
+    WidgetsBinding.instance.addObserver(this);
+    
+    // Add this to handle initial language sync
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      final savedLanguage = prefs.getString('language');
+      if (savedLanguage != null && mounted) {
+        final locale = Locale(savedLanguage);
+        if (Localizations.localeOf(context) != locale) {
+          await _syncLanguageAndAlarms(locale);
+        }
       }
+      
+      // Then proceed with normal initialization
+      _initLocationAndPrayerTimes();
     });
 
+    // Rest of your existing initState code...
     timer = Timer.periodic(Duration(seconds: 1), (_) {
       setState(() {
         currentTime = DateTime.now();
@@ -52,6 +58,7 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this); 
     timer?.cancel();
     super.dispose();
   }
@@ -61,7 +68,6 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
   Future<void> _initLocationAndPrayerTimes() async {
     final prefs = await SharedPreferences.getInstance();
     silencerMode = prefs.getString('silencer_mode') ?? 'gps';
-
 
     final lat = prefs.getDouble('latitude');
     final lon = prefs.getDouble('longitude');
@@ -81,21 +87,20 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
       }
     }
 
-  if (_loadPrayerTimesFromPrefs(prefs)) {
-    setState(() {});
-    await schedulePrayerAlarms({
-      'fajr': prayerTimes!.fajr,
-      'dhuhr': prayerTimes!.dhuhr,
-      'asr': prayerTimes!.asr,
-      'maghrib': prayerTimes!.maghrib,
-      'isha': prayerTimes!.isha,
-    });
-    await startNativeSilencerService(prayerTimes!, silencerMode);
-    
-    
-  } else {
-    await _calculatePrayerTimes();
-  }
+    if (prayerTimes != null && _loadPrayerTimesFromPrefs(prefs)) {
+      setState(() {});
+      await schedulePrayerAlarms({
+        'fajr': prayerTimes!.fajr!,
+        'dhuhr': prayerTimes!.dhuhr!,
+        'asr': prayerTimes!.asr!,
+        'maghrib': prayerTimes!.maghrib!,
+        'isha': prayerTimes!.isha!,
+      });
+      final locale = Localizations.localeOf(context).languageCode;
+      await startNativeSilencerService(prayerTimes!, silencerMode, locale);
+    } else {
+      await _calculatePrayerTimes();
+    }
   }
 
 
@@ -124,16 +129,49 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
         (key, value) => MapEntry(key, value.millisecondsSinceEpoch),
       );
 
-      // Include the mode when scheduling alarms
+      // Get current locale
+      final locale = Localizations.localeOf(context).languageCode;
+      
+      // Save locale to shared prefs
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('current_locale', locale);
+
       final result = await MethodChannel('com.example.smartsilencerapp_fixed/alarms')
           .invokeMethod('schedulePrayerAlarms', {
-            'prayerTimes': timesInMillis,
-            'mode': silencerMode, // <-- use loaded mode
-          });
-
-      print('✅ Alarms scheduled successfully: $result');
+        'prayerTimes': timesInMillis,
+        'mode': silencerMode,
+        'locale': locale,
+      });
+      print('✅ Alarms scheduled successfully with locale: $locale');
     } on PlatformException catch (e) {
       print('❌ Failed to schedule alarms: ${e.message}');
+    }
+  }
+
+
+  Future<void> _syncLanguageAndAlarms(Locale newLocale) async {
+    print('Syncing language to ${newLocale.languageCode}');
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Save the new language preference
+    await prefs.setString('language', newLocale.languageCode);
+    
+    // Update app locale
+    if (mounted) {
+      SmartSilencerApp.setLocale(context, newLocale);
+      await Future.delayed(const Duration(milliseconds: 50)); // Allow rebuild
+      
+      // Verify locale was applied
+      final currentLocale = Localizations.localeOf(context).languageCode;
+      print('Current locale after sync: $currentLocale');
+      
+      if (currentLocale == newLocale.languageCode) {
+        // Reschedule alarms with new locale
+        final currentMode = prefs.getString('silencer_mode') ?? 'gps';
+        await saveModeAndReschedule(currentMode);
+      } else {
+        print('Locale mismatch! Expected ${newLocale.languageCode}, got $currentLocale');
+      }
     }
   }
 
@@ -168,6 +206,7 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     // Save to native side
     final prefs = await SharedPreferences.getInstance();
     final mode = prefs.getString('silencer_mode') ?? 'gps';
+    final locale = Localizations.localeOf(context).languageCode;
     
     try {
       await MethodChannel('com.example.smartsilencerapp_fixed/alarms').invokeMethod(
@@ -175,15 +214,15 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
         {
           'prayerTimes': prayerTimesMap,
           'mode': mode,
+          'locale': locale,
         },
       );
     } catch (e) {
       print('Error saving times to native: $e');
     }
 
-    await startNativeSilencerService(prayerTimes!, mode);
+    await startNativeSilencerService(prayerTimes!, mode, locale);
   }
-
   Future<void> _storePrayerTimesToPrefs(PrayerTimes pt) async {
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -253,11 +292,12 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     return false;
   }
 
-    Future<void> startServiceWithPermissions(String mode, PrayerTimes pt) async {
+  Future<void> startServiceWithPermissions(String mode, PrayerTimes pt) async {
     final location = await Permission.location.request();
     final notification = await Permission.notification.request();
 
     if (location.isGranted && notification.isGranted) {
+      final locale = Localizations.localeOf(context).languageCode;
       await platform.invokeMethod('startService', {
         'mode': mode,
         'prayerTimes': {
@@ -266,7 +306,8 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
           'asr': pt.asr.millisecondsSinceEpoch,
           'maghrib': pt.maghrib.millisecondsSinceEpoch,
           'isha': pt.isha.millisecondsSinceEpoch,
-        }
+        },
+        'locale': locale,
       });
     } else {
       print("Permissions denied.");
@@ -274,7 +315,7 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     }
   }
 
-  Future<void> startNativeSilencerService(PrayerTimes pt, String mode) async {
+  Future<void> startNativeSilencerService(PrayerTimes pt, String mode, String locale) async {
     try {
       final prayers = {
         'fajr': pt.fajr,
@@ -290,22 +331,30 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
             ),
       );
 
+      print('Starting service with locale: $locale'); // Debug log
+
       await platform.invokeMethod('startService', {
         'mode': mode,
         'prayerTimes': prayerTimesMap,
+        'locale': locale,
       });
     } on PlatformException catch (e) {
       print("Native call failed: ${e.message}\n${e.details}");
     }
   }
 
-
   Future<void> saveModeAndReschedule(String mode) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('silencerMode', mode); // Save mode locally
-    setState(() {
-      silencerMode = mode;
-    });
+    await prefs.setString('silencer_mode', mode);
+    
+    // Get current locale
+    final locale = Localizations.localeOf(context).languageCode;
+    
+    if (mounted) {
+      setState(() {
+        silencerMode = mode;
+      });
+    }
 
     try {
       final Map<String, int> prayerTimesMap = {};
@@ -321,23 +370,28 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
 
       const MethodChannel alarmChannel = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
 
-      // Save to native
+      // Save to native with locale
       await alarmChannel.invokeMethod('savePrayerTimesToNative', {
         'prayerTimes': prayerTimesMap,
+        'mode': mode,
+        'locale': locale,
       });
 
-      // Schedule alarms
+      // Schedule alarms with locale
       await alarmChannel.invokeMethod('schedulePrayerAlarms', {
         'prayerTimes': prayerTimesMap,
         'mode': mode,
+        'locale': locale,
       });
 
-      print('✅ Alarms rescheduled with updated mode: $mode');
+      print('✅ Alarms rescheduled with updated mode: $mode and locale: $locale');
     } catch (e) {
       print('❌ Failed to reschedule alarms: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to fetch cached prayer times.")),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to fetch cached prayer times.")),
+        );
+      }
     }
   }
 
@@ -392,19 +446,80 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
     ];
 
     final hijriDate = HijriCalendar.now();
+    final tealColor = const Color.fromARGB(255, 13, 41, 40);
+    final lightTealColor = const Color.fromARGB(255, 38, 65, 71);
+    final nextPrayerColor = const Color.fromARGB(255, 255, 215, 0); // Gold color for next prayer
+    
+    // Determine if dark mode is active
+    final bool isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final Color defaultTextColor = isDarkMode ? Colors.white : Colors.black87;
 
     return Scaffold(
-      appBar: AppBar(title: Text("Prayer Times")),
+      appBar: AppBar(
+        title: Text(
+          AppLocalizations.translate(context, 'prayerTimes'),
+          style: TextStyle(color: Colors.white),
+        ),
+        flexibleSpace: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [lightTealColor, tealColor],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
+        actions: [
+                  DropdownButton<Locale>(
+                    underline: SizedBox(),
+                    icon: Icon(Icons.language, color: Colors.white),
+                    value: Localizations.localeOf(context),
+                    items: AppLocalizations.supportedLocales.map((Locale locale) {
+                      return DropdownMenuItem<Locale>(
+                        value: locale,
+                        child: Text(
+                          locale.languageCode == 'en' ? 'English' : 'العربية',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      );
+                    }).toList(),
+                        onChanged: (Locale? newLocale) async {
+                          if (newLocale != null) {
+                            await _syncLanguageAndAlarms(newLocale);
+                          }
+                        },
+                  ),
+        ],
+      ),
       body: coordinates == null
-          ? Center(child: Text("Waiting for location..."))
+          ? Center(
+              child: Text(
+                AppLocalizations.translate(context, 'waitingForLocation'),
+                style: TextStyle(color: defaultTextColor),
+              ),
+            )
           : Column(
               children: [
-                SizedBox(height: 16),
-                Text(
-                  "Hijri Date: ${hijriDate.hYear}-${hijriDate.hMonth}-${hijriDate.hDay}",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [lightTealColor, lightTealColor.withOpacity(0.8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      "${AppLocalizations.translate(context, 'hijriDate')}: ${hijriDate.hYear}-${hijriDate.hMonth}-${hijriDate.hDay}",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
-                SizedBox(height: 16),
                 if (prayerTimes == null)
                   CircularProgressIndicator()
                 else
@@ -416,43 +531,69 @@ class _PrayerTimesPageState extends State<PrayerTimesPage> {
                         final time = prayerTimes!.timeForPrayer(prayer);
                         final isNext = prayer == _nextPrayer();
 
-                        return ListTile(
-                          title: Text(
-                            prayer.name.toUpperCase(),
-                            style: TextStyle(
-                              fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
-                              color: isNext ? Colors.green : null,
-                            ),
+                        return Container(
+                          decoration: BoxDecoration(
+                            border: Border(bottom: BorderSide(color: tealColor.withOpacity(0.2))),
                           ),
-                          trailing: Text(
-                            _formatTime(time),
-                            style: TextStyle(
-                              fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
-                              color: isNext ? Colors.green : null,
+                          child: ListTile(
+                            title: Text(
+                              AppLocalizations.translate(context, prayer.name),
+                              style: TextStyle(
+                                fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
+                                color: isNext ? nextPrayerColor : defaultTextColor,
+                              ),
+                            ),
+                            trailing: Text(
+                              _formatTime(time),
+                              style: TextStyle(
+                                fontWeight: isNext ? FontWeight.bold : FontWeight.normal,
+                                color: isNext ? nextPrayerColor : defaultTextColor,
+                              ),
                             ),
                           ),
                         );
                       },
                     ),
                   ),
-                Divider(),
-                Text(
-                  "Next Prayer in: ${_timeUntilNextPrayer().inHours.toString().padLeft(2, '0')}:${(_timeUntilNextPrayer().inMinutes % 60).toString().padLeft(2, '0')}:${(_timeUntilNextPrayer().inSeconds % 60).toString().padLeft(2, '0')}",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [lightTealColor, lightTealColor.withOpacity(0.8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      "${AppLocalizations.translate(context, 'nextPrayerIn')}: "
+                      "${_timeUntilNextPrayer().inHours.toString().padLeft(2, '0')}:"
+                      "${(_timeUntilNextPrayer().inMinutes % 60).toString().padLeft(2, '0')}:"
+                      "${(_timeUntilNextPrayer().inSeconds % 60).toString().padLeft(2, '0')}",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
                 ),
-                SizedBox(height: 16),
               ],
             ),
     );
   }
+
 }
+
+
 
 class NativeAlarms {
   static const platform = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
 
   static Future<void> schedulePrayerAlarms() async {
     try {
-      await platform.invokeMethod('schedulePrayerAlarms');
+      final locale = PlatformDispatcher.instance.locale.languageCode;
+      await platform.invokeMethod('schedulePrayerAlarms', {'locale': locale});
     } on PlatformException catch (e) {
       print("Failed to schedule alarms: '${e.message}'.");
     }

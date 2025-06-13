@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notification_silence_prompt_title">هل تريد كتم صوت الهاتف لصلاة %1$s؟</string>
+    <string name="notification_silence_prompt_message">هل ستذهب إلى المسجد؟</string>
+    <string name="notification_skip_limit_title">⚠️ تذكير بالصلاة</string>
+    <string name="notification_skip_limit_message">لقد فوتت العديد من الصلوات! لا تفوت صلاة %1$s</string>
+    <string name="notification_prayer_skip_title">🚨 كثيرًا ما فاتتك صلاة %1$s</string>
+    <string name="notification_prayer_skip_message">لقد فاتتك صلاة %1$s عدة مرات. حاول ألا تفوتها.</string>
+    <string name="notification_gps_enable_title">📍 فعّل الموقع</string>
+    <string name="notification_gps_enable_message">اضغط لتفعيل خدمات الموقع</string>
+    <string name="notification_permissions_title">الصلاحيات مطلوبة</string>
+    <string name="notification_permissions_message">يرجى منح صلاحيات الموقع لتحديد المسجد</string>
+    <string name="notification_gps_timeout_title">انتهاء مهلة الموقع</string>
+    <string name="notification_gps_timeout_message">تعذر تحديد الموقع لصلاة %1$s</string>
+    <string name="notification_silence_scheduled_title">تم جدولة الكتم</string>
+    <string name="notification_silence_scheduled_message">سيتم كتم صوت هاتفك بعد 5 دقائق لصلاة %1$s</string>
+    <string name="notification_auto_silence_title">تم جدولة الكتم تلقائيًا</string>
+    <string name="notification_auto_silence_message">سيتم كتم صوت هاتفك بعد 5 دقائق لصلاة %1$s</string>
+    <string name="notification_action_yes">نعم</string>
+    <string name="notification_action_no">لا</string>
+    <string name="fallback_gps_title">الموقع غير متوفر</string>
+    <string name="fallback_gps_message">يتم استخدام آخر موقع معروف لأوقات الصلاة</string>
+    <string name="notification_gps_enable_message_with_timer">الوقت المتبقي: %1$s</string>
+    <string name="notification_silence_activated_title">تم تفعيل الوضع الصامت</string>
+    <string name="notification_silence_activated_message">تم كتم صوت هاتفك لصلاة %1$s</string>
+
+
+
+
+    <!-- أسماء الصلوات -->
+    <string name="prayer_fajr">الفجر</string>
+    <string name="prayer_dhuhr">الظهر</string>
+    <string name="prayer_asr">العصر</string>
+    <string name="prayer_maghrib">المغرب</string>
+    <string name="prayer_isha">العشاء</string>
+</resources>

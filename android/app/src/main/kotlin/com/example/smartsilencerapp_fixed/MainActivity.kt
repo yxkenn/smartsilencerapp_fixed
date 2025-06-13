@@ -43,6 +43,8 @@ class MainActivity : FlutterActivity() {
                 "startService" -> {
                     val mode = call.argument<String>("mode") ?: "gps"
                     val prayerTimes = call.argument<Map<String, Long>>("prayerTimes") ?: emptyMap()
+                    val locale = call.argument<String>("locale") ?: "en"
+
 
                     // Mode-specific permission check
                     val hasRequiredPerms = if (mode == "gps") {
@@ -105,7 +107,8 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
 
-                    startForegroundService(mode, prayerTimes)
+                    startForegroundService(mode, prayerTimes, locale)
+
                     result.success("Service started")
                 }
 
@@ -120,9 +123,13 @@ class MainActivity : FlutterActivity() {
                     try {
                         val mode = call.argument<String>("mode") ?: "notification"
                         val rawPrayerTimes = call.argument<Map<String, Any>>("prayerTimes") ?: emptyMap()
+                        val locale = call.argument<String>("locale") ?: "en"
+                        
+                        Log.d(TAG, "Received locale from Flutter: $locale")
+  
 
                         // Convert prayer times
-                        val prayerTimes = rawPrayerTimes.mapValues { (_, v) ->
+                        val prayerTimes = rawPrayerTimes.mapValues { (_, v) ->  
                             when (v) {
                                 is Int -> v.toLong()
                                 is Long -> v
@@ -138,6 +145,7 @@ class MainActivity : FlutterActivity() {
                         val prefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
                         prefs.edit().apply {
                             putString("silencer_mode", mode)
+                            putString("current_locale", locale)
                             prayerTimes.forEach { (prayer, time) ->
                                 putLong("${AlarmReceiver.KEY_PRAYER_PREFIX}$prayer", time)
                             }
@@ -145,7 +153,8 @@ class MainActivity : FlutterActivity() {
                         }
 
                         // Schedule alarms
-                        PrayerAlarmManager.schedulePrayerAlarms(this)
+                        PrayerAlarmManager.schedulePrayerAlarms(this, locale)
+
                         result.success(true)
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Alarm scheduling failed", e)
@@ -485,13 +494,15 @@ class MainActivity : FlutterActivity() {
     }
 
 
-    private fun startForegroundService(mode: String, prayerTimes: Map<String, Long>) {
+    private fun startForegroundService(mode: String, prayerTimes: Map<String, Long>, locale: String) {
         val intent = Intent(this, MyForegroundService::class.java).apply {
             putExtra("mode", mode)
             putExtra("prayerTimes", HashMap(prayerTimes))
+            putExtra("locale", locale) // ✅ pass locale
         }
         ContextCompat.startForegroundService(this, intent)
     }
+
 
     private fun isMyServiceRunning(serviceClass: Class<*>): Boolean {
         val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager

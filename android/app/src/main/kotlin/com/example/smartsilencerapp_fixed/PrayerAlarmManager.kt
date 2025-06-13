@@ -13,29 +13,46 @@ object PrayerAlarmManager {
     private const val TAG = "PrayerAlarmManager"
     private const val PRE_ALARM_OFFSET = 3 * 60 * 1000 // 3 minutes before prayer
 
-    fun schedulePrayerAlarms(context: Context) {
-        Log.d(TAG, "⏳ Scheduling prayer alarms...")
+    private fun getImmutableFlag(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_IMMUTABLE
+        } else {
+            0
+        }
+    }
+
+
+
+    fun schedulePrayerAlarms(context: Context, locale: String) {
+        Log.d(TAG, "⏳ Scheduling prayer alarms with locale: $locale")
+        val prefs = context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString("current_locale", locale).apply()
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val prefs = context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+        
         val mode = prefs.getString("silencer_mode", "notification") ?: "notification"
 
+        // Save the passed locale to SharedPreferences
+        
+
+        // Cancel existing alarms before setting new ones
         cancelAllAlarms(context)
+        Log.d(TAG, "Creating alarm intent with locale: $locale")
 
         AlarmReceiver.PRAYER_ORDER.forEach { prayer ->
             var prayerTime = prefs.getLong("${AlarmReceiver.KEY_PRAYER_PREFIX}$prayer", -1L)
+
             if (prayerTime > 0) {
-                // Adjust for next day if time has passed
+                // If the prayer time is in the past, move it to the next day
                 if (prayerTime < System.currentTimeMillis()) {
-                    prayerTime += AlarmManager.INTERVAL_DAY // Add 24 hours
-                    Log.d(TAG, "⏩ Adjusted $prayer time to next day")
+                    prayerTime += AlarmManager.INTERVAL_DAY
+                    Log.d(TAG, "⏩ Adjusted $prayer time to next day: ${Date(prayerTime)}")
                 }
 
                 val alarmTime = prayerTime - PRE_ALARM_OFFSET
-                val now = System.currentTimeMillis()
 
-                if (alarmTime < now) {
-                    Log.w(TAG, "⚠️ Skipping $prayer - adjusted alarm time still in past")
+                if (alarmTime < System.currentTimeMillis()) {
+                    Log.w(TAG, "⚠️ Skipping $prayer - alarm time ${Date(alarmTime)} is in the past")
                     return@forEach
                 }
 
@@ -43,49 +60,50 @@ object PrayerAlarmManager {
                     putExtra("prayer", prayer)
                     putExtra("time", prayerTime)
                     putExtra("mode", mode)
+                    putExtra("locale", locale) // Use the passed locale parameter here
                     action = "prayer_alarm_$prayer"
                     flags = Intent.FLAG_RECEIVER_FOREGROUND
                 }
 
-                val requestCode = (prayer + prayerTime.toString()).hashCode()
                 val pendingIntent = PendingIntent.getBroadcast(
                     context,
-                    requestCode,
+                    getRequestCode(prayer, prayerTime),
                     intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        PendingIntent.FLAG_IMMUTABLE
-                    } else {
-                        0
-                    }
+                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
                 )
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (alarmManager.canScheduleExactAlarms()) {
-                        alarmManager.setExactAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            alarmTime,
-                            pendingIntent
-                        )
-                    } else {
-                        alarmManager.set(
-                            AlarmManager.RTC_WAKEUP,
-                            alarmTime,
-                            pendingIntent
-                        )
-                    }
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        alarmTime,
-                        pendingIntent
-                    )
-                }
-
-                Log.d(TAG, "✅ Scheduled alarm for $prayer at ${Date(alarmTime)} (Original: ${Date(prayerTime)})")
+                setExactAlarmCompat(alarmManager, alarmTime, pendingIntent)
+                Log.d(TAG, "✅ Scheduled alarm for $prayer at ${Date(alarmTime)}")
             } else {
-                Log.w(TAG, "⚠️ No time set for $prayer")
+                Log.w(TAG, "⚠️ No saved time found for $prayer - skipping")
             }
+        }
+    }
+    private fun getRequestCode(prayer: String, time: Long): Int {
+        return (prayer + time.toString()).hashCode() and 0xffff
+    }
+
+    private fun setExactAlarmCompat(alarmManager: AlarmManager, triggerTime: Long, pendingIntent: PendingIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTime,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.set(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerTime,
+                    pendingIntent
+                )
+            }
+        } else {
+            alarmManager.setExact(
+                AlarmManager.RTC_WAKEUP,
+                triggerTime,
+                pendingIntent
+            )
         }
     }
 

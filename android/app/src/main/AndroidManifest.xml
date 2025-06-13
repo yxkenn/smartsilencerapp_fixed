@@ -23,6 +23,7 @@
     <application
         android:label="Smart Silencer"
         android:icon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
         android:usesCleartextTraffic="true">
 
         <!-- Main Activity -->

@@ -34,6 +34,8 @@ dependencies:
 
   # Network
   http: ^1.4.0
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:

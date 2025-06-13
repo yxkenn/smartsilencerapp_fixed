@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification messages -->
+    <string name="notification_silence_prompt_title">Silence for %1$s prayer?</string>
+    <string name="notification_silence_prompt_message">Are you going to the mosque?</string>
+    <string name="notification_skip_limit_title">⚠️ Prayer Reminder</string>
+    <string name="notification_skip_limit_message">You have skipped too many prayers! try not skipping this one at least </string>
+    <string name="notification_prayer_skip_title">🚨 Missed %1$s Too Often</string>
+    <string name="notification_prayer_skip_message">you have skipped %1$s prayer several times, try not to miss this one </string>
+    <string name="notification_gps_enable_message">Tap to enable location services</string>
+    <string name="notification_permissions_title">Permissions Required</string>
+    <string name="notification_permissions_message">Please grant location permissions for mosque detection</string>
+    <string name="notification_gps_timeout_title">GPS Timeout</string>
+    <string name="notification_gps_timeout_message">Could not detect location for this prayer</string>
+    <string name="notification_silence_scheduled_title">Silence Scheduled</string>
+    <string name="notification_silence_scheduled_message">Your phone will be silenced in 5 minutes for %1$s prayer</string>
+    <string name="notification_auto_silence_title">Auto Silence Scheduled</string>
+    <string name="notification_auto_silence_message">Your phone will be silenced in 5 minutes for %1$s prayer</string>
+    <string name="notification_action_yes">Yes</string>
+    <string name="notification_action_no">No</string>
+    <string name="fallback_gps_title">Location Unavailable</string>
+    <string name="fallback_gps_message">Using last known location for prayer time</string>
+    <string name="notification_gps_enable_title">📍 Enable GPS for %1$s</string>
+    <string name="notification_gps_enable_message_with_timer">Time remaining: %1$s</string>
+    <string name="notification_silence_activated_title">Silence Activated</string>
+    <string name="notification_silence_activated_message">Your phone has been silenced for %1$s prayer</string>
+
+
+
+    <!-- Prayer names -->
+    <string name="prayer_fajr">Fajr</string>
+    <string name="prayer_dhuhr">Dhuhr</string>
+    <string name="prayer_asr">Asr</string>
+    <string name="prayer_maghrib">Maghrib</string>
+    <string name="prayer_isha">Isha</string>
+</resources>

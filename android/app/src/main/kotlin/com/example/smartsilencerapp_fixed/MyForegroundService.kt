@@ -15,6 +15,10 @@ import java.util.*
 import android.content.pm.ServiceInfo
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.content.res.Configuration
+
+
+
 
 
 
@@ -36,6 +40,7 @@ class MyForegroundService : Service() {
         const val ACTION_USER_CONFIRMED = "user_confirmed_silence"
         const val ACTION_USER_DECLINED = "user_declined_silence"
         const val ACTION_GPS_TIMEOUT = "gps_wait_timeout"
+        const val PREF_GPS_WAITING_ACTIVE = "gps_waiting_active"
 
         const val GPS_CHECK_INTERVAL = 30_000L // 30 seconds
         const val DND_DURATION = 25 * 60 * 1000L // 40 minutes
@@ -54,7 +59,20 @@ class MyForegroundService : Service() {
         const val DND_ACTIVATION_DELAY = 5 * 60 * 1000L // 5 minutes
     }
 
+    private var currentLocale: String = "en" // default to English
+
     private val TAG = "MyForegroundService"
+
+    private val adhkarList = listOf(
+        "سبحان الله",
+        "الحمد لله",
+        "الله أكبر",
+        "لا إله إلا الله",
+        "أستغفر الله",
+        "اللهم صل على محمد",
+        "سبحان الله وبحمده سبحان الله العظيم"
+    )
+
 
     private var prayerTimesMap: Map<String, Long> = emptyMap()
     private var mode: String = "notification"
@@ -66,9 +84,9 @@ class MyForegroundService : Service() {
     private lateinit var locationRunnable: Runnable
     private var gpsWaitStartTime = 0L
 
-    private val mosqueLat = 33.8131598
-    private val mosqueLon = 2.8649877
-    private val mosqueRadiusMeters = 100
+    private val mosqueLat = 33.815077007411155
+    private val mosqueLon = 2.864483237898059 
+    private val mosqueRadiusMeters = 150
 
     private lateinit var alarmManager: AlarmManager
     private lateinit var pendingAlarmIntent: PendingIntent
@@ -85,6 +103,21 @@ class MyForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
+             currentLocale = intent?.getStringExtra("locale") 
+            ?: getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString("current_locale", "en") 
+            ?: "en"
+
+            // Update prefs if we got a new locale from intent
+            intent?.getStringExtra("locale")?.let { newLocale ->
+                if (newLocale != currentLocale) {
+                    currentLocale = newLocale
+                    getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString("current_locale", currentLocale)
+                        .apply()
+                }
+            }
             // ✅ Extract mode and prayer before starting anything
             // Avoid fallback to potentially incorrect value
             val newMode = intent?.getStringExtra("mode")
@@ -94,13 +127,28 @@ class MyForegroundService : Service() {
 
             currentPrayer = intent?.getStringExtra("prayer") ?: currentPrayer
 
+            val prefs = getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+            currentLocale = prefs.getString("current_locale", "en") ?: "en"
+            
+            // Then process the intent which might contain a newer locale
+            val newLocale = intent?.getStringExtra("locale") ?: currentLocale
+            if (newLocale != currentLocale) {
+                currentLocale = newLocale
+                prefs.edit().putString("current_locale", currentLocale).apply()
+                Log.d(TAG, "Locale updated to: $currentLocale")
+            }
+
             Log.d(TAG, "Service started with action=${intent?.action}, mode=$mode")
 
             // ✅ Build notification after mode is known
-            val notification = buildForegroundNotification("Initializing silencer...")
+            val adhkar = getRandomAdhkar()
+            val notification = buildForegroundNotification(adhkar)
+
 
             // ✅ Handle foreground service with location type if needed
             startForegroundSafe(notification)
+
+            
 
 
             // ✅ Process the intent actions
@@ -143,6 +191,7 @@ class MyForegroundService : Service() {
                     val prayer = intent.getStringExtra("prayer") ?: return START_STICKY
                     Log.d(TAG, "GPS notification dismissed for $prayer")
                     // Optional: handle dismissal logic
+                    getPrefs().edit().putBoolean(PREF_GPS_WAITING_ACTIVE, false).apply()
                 }
 
                 ACTION_SKIP_LIMIT_REACHED -> {
@@ -173,6 +222,11 @@ class MyForegroundService : Service() {
 
         return START_STICKY
     }
+
+    private fun getRandomAdhkar(): String {
+        return adhkarList.random()
+    }
+
 
 
 
@@ -245,15 +299,16 @@ class MyForegroundService : Service() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Foreground service channel (MUST EXIST)
-            NotificationChannel(CHANNEL_ID, "Foreground Service", NotificationManager.IMPORTANCE_LOW).apply {
+            // Foreground service channel - set to minimum importance
+            NotificationChannel(CHANNEL_ID, "Foreground Service", NotificationManager.IMPORTANCE_MIN).apply {
                 description = "Background service notifications"
                 setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET // Hide from lock screen
             }.also { channel ->
                 getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
             }
 
-            // Existing alerts channel
+            // Keep your existing alerts channel as is
             NotificationChannel(ALERTS_CHANNEL_ID, "Prayer Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Important prayer time notifications"
                 enableLights(true)
@@ -269,30 +324,35 @@ class MyForegroundService : Service() {
         }
     }
 
-
     private fun showSkipLimitNotification(prayer: String) {
-        Log.d(TAG, "Showing skip limit notification for prayer: $prayer")
+        val localizedPrayer = getLocalizedPrayerName(this, prayer)
+
+        val title = getLocalizedString(R.string.notification_skip_limit_title)
+        val message = getLocalizedString(R.string.notification_skip_limit_message, localizedPrayer)
 
         val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-            .setContentTitle("⚠️ Prayer Reminder")
-            .setContentText("You've skipped too many prayers! Don't skip $prayer prayer")
+            .setContentTitle(title)
+            .setContentText(message)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(Notification.DEFAULT_ALL)  // ✅ vibrate, lights
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)  // ✅ show on lockscreen
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .build()
 
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIF_ID_SILENCE_PROMPT + 1000, notification) // 💡 bump ID to avoid conflicts
+            .notify(NOTIF_ID_SILENCE_PROMPT + 1000, notification)
     }
 
     private fun showPrayerSpecificSkipNotification(prayer: String) {
-        Log.d(TAG, "Showing prayer-specific skip notification for $prayer")
+        val localizedPrayer = getLocalizedPrayerName(this, prayer)
+
+        val title = getLocalizedString(R.string.notification_prayer_skip_title, localizedPrayer)
+        val message = getLocalizedString(R.string.notification_prayer_skip_message, localizedPrayer)
 
         val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-            .setContentTitle("🚨 Missed $prayer Too Often")
-            .setContentText("You've skipped $prayer prayer several times. Try not to miss it.")
+            .setContentTitle(title)
+            .setContentText(message)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
@@ -306,26 +366,23 @@ class MyForegroundService : Service() {
 
 
 
-    private fun buildForegroundNotification(content: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Smart Silencer")
-            .setContentText(content)
-            .setSmallIcon(R.drawable.ic_menu_mylocation) // MUST be a valid icon
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this, 
-                    0, 
-                    Intent(this, MainActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
-                )
-            )
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+    private fun buildForegroundNotification(adhkar: String): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID) // Use CHANNEL_ID instead of ALERTS_CHANNEL_ID
+            .setContentTitle("📿 $adhkar")
+            .setSmallIcon(R.drawable.ic_menu_mylocation)
+            .setPriority(NotificationCompat.PRIORITY_MIN) // Set to minimum priority
             .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
+            .setShowWhen(false) // Don't show time
+            .setCategory(Notification.CATEGORY_SERVICE) // Mark as service notification
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET) // Hide from lock screen
+            .setSound(null) // No sound
+            .setVibrate(null) // No vibration
             .build()
     }
 
-    private fun handleGpsMode(prayer: String) {
+
+
+   private fun handleGpsMode(prayer: String) {
         if (!checkLocationPermissions()) {
             Log.w(TAG, "Cannot start GPS mode - missing permissions")
             // Fallback to notification mode
@@ -336,14 +393,14 @@ class MyForegroundService : Service() {
 
         if (!isGpsEnabled()) {
             Log.d(TAG, "GPS not enabled - starting waiting loop")
+            // Always show notification when first detecting GPS is off
+            showGpsWaitingNotification(prayer)
             startGpsWaitingLoop(prayer)
         } else {
             Log.d(TAG, "GPS enabled - starting location checks")
             startLocationChecks(prayer)
         }
     }
-
-
 
     private fun runSilencerLogic(prayer: String) {
         Log.d(TAG, "Running silencer for $prayer in $mode mode")
@@ -372,9 +429,12 @@ class MyForegroundService : Service() {
                 
                 scheduleSoundRestore(prayer, DND_ACTIVATION_DELAY + DND_DURATION)
                 
+            
+                val localizedPrayer = getLocalizedPrayerName(this, prayer)
+
                 sendNotification(
-                    "Auto Silence Scheduled",
-                    "Your phone will be silenced in 5 minutes for $prayer prayer",
+                    getLocalizedString(R.string.notification_auto_silence_title),
+                    getLocalizedString(R.string.notification_auto_silence_message, localizedPrayer),
                     NOTIF_ID_SILENCE_PROMPT,
                     autoCancel = true
                 )
@@ -382,10 +442,12 @@ class MyForegroundService : Service() {
         }
     }
 
-    private fun startGpsWaitingLoop(prayer: String) {
+  private fun startGpsWaitingLoop(prayer: String) {
         gpsWaitStartTime = System.currentTimeMillis()
-        locationHandler.removeCallbacksAndMessages(null)
-        showGpsWaitingNotification(prayer)
+        
+        // Mark that we're actively waiting for GPS
+        getPrefs().edit().putBoolean(PREF_GPS_WAITING_ACTIVE, true).apply()
+        
         logEvent("gps_waiting_$prayer")
 
         val gpsCheckRunnable = object : Runnable {
@@ -394,15 +456,20 @@ class MyForegroundService : Service() {
                 
                 if (elapsed > GPS_WAIT_TIMEOUT) {
                     Log.w(TAG, "GPS wait timeout reached for $prayer")
+                    // Clear waiting state
+                    getPrefs().edit().putBoolean(PREF_GPS_WAITING_ACTIVE, false).apply()
                     handleGpsTimeout(prayer)
                     return
                 }
 
                 if (isGpsEnabled()) {
                     Log.d(TAG, "GPS now enabled - proceeding with $prayer prayer")
+                    // Clear waiting state
+                    getPrefs().edit().putBoolean(PREF_GPS_WAITING_ACTIVE, false).apply()
                     startLocationChecks(prayer)
                 } else {
                     Log.d(TAG, "Still waiting for GPS (${(GPS_WAIT_TIMEOUT - elapsed)/1000}s remaining)...")
+                    // Update the existing notification
                     updateGpsWaitingNotification(prayer, elapsed)
                     locationHandler.postDelayed(this, GPS_CHECK_INTERVAL)
                 }
@@ -411,7 +478,7 @@ class MyForegroundService : Service() {
         locationHandler.post(gpsCheckRunnable)
     }
 
-    private fun startLocationChecks(prayer: String) {
+   private fun startLocationChecks(prayer: String) {
         if (!checkLocationPermissions()) {
             Log.w(TAG, "Location permissions not granted")
             sendNotification(
@@ -434,10 +501,6 @@ class MyForegroundService : Service() {
                 try {
                     currentPrayer?.let {
                         if (isGpsEnabled()) {
-                            // Dismiss the notification when GPS is enabled
-                            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                                .cancel(NOTIF_ID_GPS_PROMPT)
-                                
                             if (isInMosqueZone()) {
                                 activateDnd(it)
                             } else {
@@ -445,9 +508,10 @@ class MyForegroundService : Service() {
                             }
                             locationHandler.postDelayed(this, GPS_CHECK_INTERVAL)
                         } else {
-                            Log.d(TAG, "GPS disabled during checks - restarting waiting loop")
+                            Log.d(TAG, "GPS disabled during checks - stopping location monitoring")
                             restoreNormalSoundMode()
-                            startGpsWaitingLoop(prayer)
+                            // Don't restart waiting loop - just stop monitoring
+                            stopForeground(STOP_FOREGROUND_REMOVE)
                         }
                     }
                 } catch (e: SecurityException) {
@@ -485,73 +549,84 @@ class MyForegroundService : Service() {
 
     private fun showGpsWaitingNotification(prayer: String) {
         try {
-            // Create intent to open location settings - using the correct action
+            val localizedPrayer = getLocalizedPrayerName(this, prayer)
+
+            // Intent to open location settings - improved version
             val gpsSettingsIntent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                // Add package name for some devices
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                // Add package for specific manufacturers if needed
                 `package` = when {
                     Build.MANUFACTURER.equals("xiaomi", ignoreCase = true) -> "com.android.settings"
+                    Build.MANUFACTURER.equals("huawei", ignoreCase = true) -> "com.android.settings"
                     else -> null
                 }
             }
-            
-            // Create pending intent with proper flags
+
             val pendingIntent = PendingIntent.getActivity(
                 this,
                 0,
                 gpsSettingsIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
             )
 
-            // Create delete intent that will be triggered when notification is dismissed
+            // Intent for notification dismissal
             val deleteIntent = Intent(this, MyForegroundService::class.java).apply {
                 action = "GPS_NOTIFICATION_DISMISSED"
                 putExtra("prayer", prayer)
             }
+
             val deletePendingIntent = PendingIntent.getService(
                 this,
                 0,
                 deleteIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
             )
 
+            // Notification content
+            val title = getLocalizedString(R.string.notification_gps_enable_title, localizedPrayer)
+            val message = getLocalizedString(R.string.notification_gps_enable_message)
+
             val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-                .setContentTitle("📍 Enable Location for $prayer")
-                .setContentText("Tap to enable location services")
+                .setContentTitle(title)
+                .setContentText(message)
                 .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setContentIntent(pendingIntent)
+                .setContentIntent(pendingIntent) // This will open GPS settings when tapped
                 .setDeleteIntent(deletePendingIntent)
                 .setAutoCancel(true)
                 .setOngoing(false)
                 .build()
 
-            // Show as regular notification
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIF_ID_GPS_PROMPT, notification)
-            
+
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show GPS notification", e)
-            // Fallback with simpler intent
+            // Fallback to simpler intent if the specific one fails
             try {
                 val fallbackIntent = Intent(Settings.ACTION_SETTINGS).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 }
+
+                val fallbackPendingIntent = PendingIntent.getActivity(
+                    this,
+                    0,
+                    fallbackIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+                )
+
                 val fallbackNotification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-                    .setContentTitle("Enable Location")
-                    .setContentText("Please enable location services")
+                    .setContentTitle(getLocalizedString(R.string.fallback_gps_title))
+                    .setContentText(getLocalizedString(R.string.fallback_gps_message))
                     .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-                    .setContentIntent(PendingIntent.getActivity(
-                        this, 0, fallbackIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                    ))
+                    .setContentIntent(fallbackPendingIntent)
                     .setAutoCancel(true)
                     .build()
-                
+
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(NOTIF_ID_GPS_PROMPT, fallbackNotification)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to show fallback notification", e)
+            } catch (e2: Exception) {
+                Log.e(TAG, "Failed to show fallback GPS notification", e2)
             }
         }
     }
@@ -585,14 +660,23 @@ class MyForegroundService : Service() {
 
 
     private fun sendSilencePromptNotification(prayer: String) {
+        // Store the time when notification was shown
+        getPrefs().edit().putLong("notification_time_$prayer", System.currentTimeMillis()).apply()
+        
+        val localizedPrayer = getLocalizedPrayerName(this, prayer)
+        val title = getLocalizedString(R.string.notification_silence_prompt_title, localizedPrayer)
+        val message = getLocalizedString(R.string.notification_silence_prompt_message)
+        val yesText = getLocalizedString(R.string.notification_action_yes)
+        val noText = getLocalizedString(R.string.notification_action_no)
+
         val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-            .setContentTitle("Silence for $prayer prayer?")
-            .setContentText("Are you going to the mosque?")
+            .setContentTitle(title)
+            .setContentText(message)
             .setSmallIcon(android.R.drawable.ic_lock_silent_mode)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .addAction(
                 android.R.drawable.ic_lock_silent_mode,
-                "Yes",
+                yesText,
                 PendingIntent.getService(
                     this, prayer.hashCode(),
                     Intent(this, MyForegroundService::class.java).apply {
@@ -605,7 +689,7 @@ class MyForegroundService : Service() {
             )
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "No",
+                noText,
                 PendingIntent.getService(
                     this, 1,
                     Intent(this, MyForegroundService::class.java).apply {
@@ -739,6 +823,51 @@ class MyForegroundService : Service() {
 
 
 
+
+    private fun getLocalizedString(resId: Int, vararg formatArgs: Any): String {
+        Log.d(TAG, "Getting string for resId: $resId with locale: $currentLocale")
+        try {
+            val configuration = Configuration(resources.configuration)
+            configuration.setLocale(Locale(currentLocale))
+            val localizedContext = createConfigurationContext(configuration)
+            val result = localizedContext.resources.getString(resId, *formatArgs)
+            Log.d(TAG, "Localized string result: $result")
+            return result
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in getLocalizedString: ", e)
+            return resources.getString(resId, *formatArgs) // fallback
+        }
+    }
+    
+    private fun getLocalizedPrayerName(context: Context, prayer: String): String {
+        return try {
+            val configuration = Configuration(context.resources.configuration)
+            configuration.setLocale(Locale(currentLocale))
+            val localizedContext = context.createConfigurationContext(configuration)
+            
+            when (prayer.lowercase()) {
+                "fajr" -> localizedContext.getString(R.string.prayer_fajr)
+                "dhuhr" -> localizedContext.getString(R.string.prayer_dhuhr)
+                "asr" -> localizedContext.getString(R.string.prayer_asr)
+                "maghrib" -> localizedContext.getString(R.string.prayer_maghrib)
+                "isha" -> localizedContext.getString(R.string.prayer_isha)
+                else -> prayer
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in getLocalizedPrayerName: ", e)
+            // Fallback to English if localization fails
+            when (prayer.lowercase()) {
+                "fajr" -> "Fajr"
+                "dhuhr" -> "Dhuhr"
+                "asr" -> "Asr"
+                "maghrib" -> "Maghrib"
+                "isha" -> "Isha"
+                else -> prayer
+            }
+        }
+    }
+
+
     
     private fun handleGpsTimeout(prayer: String) {
         Log.d(TAG, "Handling GPS timeout for prayer: $prayer")
@@ -750,9 +879,12 @@ class MyForegroundService : Service() {
         }
         logEvent("gps_timeout_$prayer")
         stopForeground(true)
+          
+        val localizedPrayer = getLocalizedPrayerName(this, prayer)
+  
         sendNotification(
-            "GPS Timeout",
-            "Couldn't detect location for $prayer prayer",
+            getLocalizedString(R.string.notification_gps_timeout_title),
+            getLocalizedString(R.string.notification_gps_timeout_message, localizedPrayer),
             NOTIF_ID_GPS_PROMPT,
             autoCancel = true
         )
@@ -778,16 +910,24 @@ class MyForegroundService : Service() {
         val timeLeft = (GPS_WAIT_TIMEOUT - elapsed) / 1000
         val mins = timeLeft / 60
         val secs = timeLeft % 60
-        
+
+        val localizedPrayer = getLocalizedPrayerName(this, prayer)
+        val title = getLocalizedString(R.string.notification_gps_enable_title, localizedPrayer)
+        val message = getLocalizedString(
+            R.string.notification_gps_enable_message_with_timer,
+            String.format("%dm %ds", mins, secs)
+        )
+
         val notification = NotificationCompat.Builder(this, ALERTS_CHANNEL_ID)
-            .setContentTitle("📍 Enable GPS for $prayer")
-            .setContentText("Time remaining: ${mins}m ${secs}s")
+            .setContentTitle(title)
+            .setContentText(message)
             .setSmallIcon(R.drawable.ic_lock_silent_mode)
             .build()
 
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIF_ID_GPS_PROMPT, notification)
     }
+
 
     private fun scheduleSoundRestore(prayer: String, delayMillis: Long) {
         val restoreTime = System.currentTimeMillis() + delayMillis
@@ -872,40 +1012,61 @@ class MyForegroundService : Service() {
     }
 
 
-    private fun handleUserConfirmation(prayer: String) {
-        Log.d(TAG, "User confirmed silence for $prayer - will activate in 5 minutes")
+   private fun handleUserConfirmation(prayer: String) {
+        Log.d(TAG, "User confirmed silence for $prayer")
         resetSkipCount()
-        // Show a notification that DND will be activated soon
-        sendNotification(
-            "Silence Scheduled",
-            "Your phone will be silenced in 5 minutes for $prayer prayer",
-            NOTIF_ID_SILENCE_PROMPT,
-            autoCancel = true
-        )
         
-        // Schedule DND activation after 5 minutes
-        val activateIntent = Intent(this, MyForegroundService::class.java).apply {
-            action = "silence_now"
-            putExtra("prayer", prayer)
+        val prefs = getPrefs()
+        val confirmationTime = System.currentTimeMillis()
+        val notificationTime = prefs.getLong("notification_time_$prayer", 0L)
+        
+        // Check if 5 minutes have passed since notification was shown
+        if (notificationTime > 0 && (confirmationTime - notificationTime) > DND_ACTIVATION_DELAY) {
+            Log.d(TAG, "5 minutes have passed - activating DND immediately")
+            activateDnd(prayer)
+            
+            // Show immediate activation notification
+            val localizedPrayer = getLocalizedPrayerName(this, prayer)
+            sendNotification(
+                getLocalizedString(R.string.notification_silence_activated_title),
+                getLocalizedString(R.string.notification_silence_activated_message, localizedPrayer),
+                NOTIF_ID_SILENCE_PROMPT,
+                autoCancel = true
+            )
+        } else {
+            Log.d(TAG, "Within 5 minute window - will activate in ${DND_ACTIVATION_DELAY / (60 * 1000)} minutes")
+            // Original logic - schedule for 5 minutes later
+            val localizedPrayer = getLocalizedPrayerName(this, prayer)
+            sendNotification(
+                getLocalizedString(R.string.notification_silence_scheduled_title),
+                getLocalizedString(R.string.notification_silence_scheduled_message, localizedPrayer),
+                NOTIF_ID_SILENCE_PROMPT,
+                autoCancel = true
+            )
+            
+            // Schedule DND activation after 5 minutes
+            val activateIntent = Intent(this, MyForegroundService::class.java).apply {
+                action = "silence_now"
+                putExtra("prayer", prayer)
+            }
+            
+            val pendingActivateIntent = PendingIntent.getService(
+                this, 
+                prayer.hashCode() + 1,
+                activateIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
+            )
+            
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + DND_ACTIVATION_DELAY,
+                pendingActivateIntent
+            )
         }
         
-        val pendingActivateIntent = PendingIntent.getService(
-            this, 
-            prayer.hashCode() + 1, // Different ID from confirmation
-            activateIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
-        )
-        
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + DND_ACTIVATION_DELAY,
-            pendingActivateIntent
-        )
-        
-        // Schedule sound restore after total duration (5 min delay + DND duration)
-        scheduleSoundRestore(prayer, DND_ACTIVATION_DELAY + DND_DURATION)
+        // Schedule sound restore after total duration (either immediate + DND_DURATION or 5 min delay + DND_DURATION)
+        scheduleSoundRestore(prayer, DND_DURATION)
     }
-
 
     private fun handleUserDecline() {
         Log.d(TAG, "Handling user decline of prayer silence")

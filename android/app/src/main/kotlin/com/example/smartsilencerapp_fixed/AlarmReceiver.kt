@@ -39,6 +39,15 @@ class AlarmReceiver : BroadcastReceiver() {
             return prefs.getString(KEY_MODE, MODE_NOTIFICATION) ?: MODE_NOTIFICATION
         }
 
+        private fun getImmutableFlag(): Int {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+        }
+
+
         fun logAllScheduledAlarms(context: Context) {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val currentMode = getCurrentMode(context)
@@ -100,13 +109,7 @@ class AlarmReceiver : BroadcastReceiver() {
             return (hasFineLoc || hasCoarseLoc) && hasFgsLoc && hasExactAlarms
         }
 
-        private fun getImmutableFlag(): Int {
-            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_IMMUTABLE
-            } else {
-                0
-            }
-        }
+
     }
 
     private fun isValidMode(mode: String): Boolean {
@@ -131,6 +134,23 @@ class AlarmReceiver : BroadcastReceiver() {
         Log.d(TAG, "══════════════════════════════════════")
         Log.d(TAG, "⏰ ALARM RECEIVED at ${Date()}")
 
+        // Unified locale fallback: intent -> prefs -> default
+        val locale = intent?.getStringExtra("locale")?.takeIf { it.isNotEmpty() }
+            ?: context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString("current_locale", "en")
+            ?: "en"
+        
+        Log.d(TAG, "Using locale: $locale")
+        Log.d(TAG, "Using locale: $locale (source: ${
+            when {
+                intent?.hasExtra("locale") == true -> "intent"
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .contains("current_locale") -> "prefs"
+                else -> "default"
+            }
+        })")
+        
+
         val prayerName = intent?.getStringExtra("prayer")
             ?: intent?.action?.substringAfter("prayer_alarm_")
             ?: "unknown"
@@ -141,6 +161,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val prayerPref = getPrayerPreference(context, prayerName, currentDay)
 
         var currentMode = prefs.getString(KEY_MODE, MODE_NOTIFICATION) ?: MODE_NOTIFICATION
+
         if (!isValidMode(currentMode)) {
             Log.w(TAG, "⚠️ Invalid mode detected: $currentMode. Defaulting to notification")
             currentMode = MODE_NOTIFICATION
@@ -152,40 +173,41 @@ class AlarmReceiver : BroadcastReceiver() {
                 Log.d(TAG, "⏭️ Prayer $prayerName is excluded today - skipping")
                 return
             }
+
             PrayerPreference.CERTAIN -> {
                 val prayerTime = intent?.getLongExtra("time", -1L) 
                     ?: prefs.getLong("${KEY_PRAYER_PREFIX}$prayerName", -1L)
-                
+
                 if (prayerTime <= 0) {
                     Log.e(TAG, "❌ No valid prayer time found for $prayerName")
                     return
                 }
 
                 Log.d(TAG, "🕌 Prayer $prayerName is certain today - scheduling auto mode")
-                
+
                 val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                
-                // Schedule DND activation
+
+                // DND activation
                 val activateIntent = Intent(context, MyForegroundService::class.java).apply {
                     action = "silence_now"
                     putExtra("prayer", prayerName)
                     putExtra("mode", "auto")
                 }
-                
+
                 val pendingActivate = PendingIntent.getService(
                     context,
                     prayerName.hashCode() + 1,
                     activateIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
                 )
-                
+
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     System.currentTimeMillis() + AutoModeStarterService.DND_ACTIVATION_DELAY,
                     pendingActivate
                 )
-                
-                // Schedule sound restore
+
+                // Restore sound
                 val restoreIntent = Intent(context, RestoreSoundReceiver::class.java)
                 val pendingRestore = PendingIntent.getBroadcast(
                     context,
@@ -193,14 +215,14 @@ class AlarmReceiver : BroadcastReceiver() {
                     restoreIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or getImmutableFlag()
                 )
-                
+
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
-                    System.currentTimeMillis() + AutoModeStarterService.DND_ACTIVATION_DELAY + 
-                        AutoModeStarterService.DND_DURATION,
+                    System.currentTimeMillis() + AutoModeStarterService.DND_ACTIVATION_DELAY +
+                            AutoModeStarterService.DND_DURATION,
                     pendingRestore
                 )
-                
+
                 return
             }
 
@@ -208,23 +230,22 @@ class AlarmReceiver : BroadcastReceiver() {
                 Log.d(TAG, "🎛️ Prayer $prayerName uses default mode: $currentMode")
 
                 val serviceIntent = Intent(context, MyForegroundService::class.java).apply {
-                    // No action or use your custom action to trigger default silencer logic
-                    action = "run_silencer_logic"  // or just omit action so it hits default case
+                    action = "run_silencer_logic"
                     putExtra("prayer", prayerName)
                     putExtra("mode", currentMode)
+                    putExtra("locale", locale)  // Ensure locale is passed
                 }
 
                 try {
                     ContextCompat.startForegroundService(context, serviceIntent)
-                    Log.d(TAG, "🚀 Started MyForegroundService with mode: $currentMode")
+                    Log.d(TAG, "🚀 Started MyForegroundService with mode: $currentMode and locale: $locale")
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Failed to start foreground service", e)
                 }
-
-
             }
         }
 
+        // Wake lock & permission logic
         val wakeLock = (context.getSystemService(Context.POWER_SERVICE) as PowerManager).run {
             newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK or
@@ -260,6 +281,7 @@ class AlarmReceiver : BroadcastReceiver() {
             wakeLock.release()
         }
     }
+
 
     private fun showPermissionNotification(context: Context) {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

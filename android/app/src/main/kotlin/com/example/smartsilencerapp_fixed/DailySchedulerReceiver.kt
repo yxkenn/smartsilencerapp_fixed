@@ -20,7 +20,10 @@ class DailySchedulerReceiver : BroadcastReceiver() {
         // Delay slightly to ensure SharedPreferences and prayer times are ready
         Handler(Looper.getMainLooper()).postDelayed({
             Log.d(TAG, "🔁 Rescheduling today's prayer alarms")
-            PrayerAlarmManager.schedulePrayerAlarms(context)
+            val prefs = context.getSharedPreferences(AlarmReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+            val locale = prefs.getString("app_locale", "en") ?: "en"
+            PrayerAlarmManager.schedulePrayerAlarms(context, locale)
+
         }, 2000L) // 2 second delay
     }
 }

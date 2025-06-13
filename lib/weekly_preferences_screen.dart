@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'localization.dart'; // <-- Make sure this is imported
 
 class WeeklyPreferencesScreen extends StatefulWidget {
   @override
@@ -11,6 +12,7 @@ class _WeeklyPreferencesScreenState extends State<WeeklyPreferencesScreen> {
   final List<String> days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
   final List<String> prayers = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
   bool _isLoading = true;
+  int? _expandedDayIndex;
 
   @override
   void initState() {
@@ -21,12 +23,11 @@ class _WeeklyPreferencesScreenState extends State<WeeklyPreferencesScreen> {
   Future<void> _loadPreferences() async {
     try {
       final channel = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
-      final Map<dynamic, dynamic>? loadedPrefs = 
+      final Map<dynamic, dynamic>? loadedPrefs =
           await channel.invokeMethod('loadWeeklyPreferences');
-      
+
       if (loadedPrefs != null) {
         setState(() {
-          // Convert the loaded preferences to our format
           loadedPrefs.forEach((day, prayerPrefs) {
             preferences[day as String] = {};
             (prayerPrefs as Map<dynamic, dynamic>).forEach((prayer, pref) {
@@ -36,12 +37,10 @@ class _WeeklyPreferencesScreenState extends State<WeeklyPreferencesScreen> {
           _isLoading = false;
         });
       } else {
-        // Initialize with defaults if nothing loaded
         _initializeDefaults();
       }
     } catch (e) {
       print('Error loading preferences: $e');
-      // Initialize with defaults on error
       _initializeDefaults();
     }
   }
@@ -60,69 +59,131 @@ class _WeeklyPreferencesScreenState extends State<WeeklyPreferencesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final tr = AppLocalizations.translate;
+    final tealColor = const Color.fromARGB(255, 13, 41, 40);
+    final lightTealColor = const Color.fromARGB(255, 38, 65, 71);
+    final goldColor = const Color.fromARGB(255, 120, 213, 230);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: Text('Weekly Prayer Preferences')),
-        body: Center(child: CircularProgressIndicator()),
+        appBar: AppBar(
+          title: Text(
+            tr(context, 'weeklyPrayerPreferences'),
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: tealColor,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text('Weekly Prayer Preferences')),
+      appBar: AppBar(
+        title: Text(
+          tr(context, 'weeklyPrayerPreferences'),
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: tealColor,
+      ),
       body: ListView.builder(
         itemCount: days.length,
         itemBuilder: (context, dayIndex) {
           final day = days[dayIndex];
-          return ExpansionTile(
-            title: Text(day.toUpperCase()),
-            children: prayers.map((prayer) {
-              return ListTile(
-                title: Text(prayer.toUpperCase()),
-                trailing: DropdownButton<String>(
-                  value: preferences[day]![prayer],
-                  items: [
-                    DropdownMenuItem(
-                      value: 'DEFAULT',
-                      child: Text('Default Mode'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'CERTAIN',
-                      child: Text('Certainly Going'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'EXCLUDED',
-                      child: Text('Excluded'),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setState(() {
-                      preferences[day]![prayer] = value!;
-                    });
-                  },
+          final isExpanded = _expandedDayIndex == dayIndex;
+
+          return Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              gradient: LinearGradient(
+                colors: [lightTealColor, tealColor],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                dividerColor: Colors.transparent,
+                unselectedWidgetColor: Colors.white70,
+              ),
+              child: ExpansionTile(
+                key: isExpanded ? UniqueKey() : Key(day),
+                initiallyExpanded: isExpanded,
+                onExpansionChanged: (expanded) {
+                  setState(() {
+                    _expandedDayIndex = expanded ? dayIndex : null;
+                  });
+                },
+
+                title: Text(
+                  tr(context, day),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              );
-            }).toList(),
+                children: prayers.map((prayer) {
+                  return Container(
+                    color: Colors.black,
+                    child: ListTile(
+                      title: Text(
+                        tr(context, prayer),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      trailing: DropdownButton<String>(
+                        dropdownColor: Colors.grey[900],
+                        value: preferences[day]![prayer],
+                        underline: const SizedBox(),
+                        iconEnabledColor: Colors.white,
+                        style: const TextStyle(color: Colors.white),
+                        items: [
+                          DropdownMenuItem(
+                            value: 'DEFAULT',
+                            child: Text(tr(context, 'defaultMode')),
+                          ),
+                          DropdownMenuItem(
+                            value: 'CERTAIN',
+                            child: Text(tr(context, 'certainlyGoing')),
+                          ),
+                          DropdownMenuItem(
+                            value: 'EXCLUDED',
+                            child: Text(tr(context, 'excluded')),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() {
+                            preferences[day]![prayer] = value!;
+                          });
+                        },
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
-        child: Icon(Icons.save),
+        backgroundColor: goldColor,
+        child: const Icon(Icons.save, color: Colors.black),
         onPressed: () async {
-          print('Saving preferences: $preferences');
           try {
             final channel = MethodChannel('com.example.smartsilencerapp_fixed/alarms');
             await channel.invokeMethod('saveWeeklyPreferences', {'preferences': preferences});
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Preferences saved successfully!')),
+              SnackBar(content: Text(tr(context, 'autoSaveNote'))),
             );
           } catch (e) {
             print('Error saving preferences: $e');
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to save preferences: $e')),
+              SnackBar(content: Text('${tr(context, 'failedToSave')} $e')),
             );
           }
         },
       ),
     );
   }
+
 }
